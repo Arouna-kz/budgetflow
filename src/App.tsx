@@ -1,0 +1,1356 @@
+import { useState, useEffect, useCallback } from 'react';
+import { Target, Users, FileText, BarChart3, CreditCard, Banknote, ArrowRightLeft, DollarSign, Settings, LogOut, Menu, X } from 'lucide-react';
+import { useAuth } from './hooks/useAuth';
+import { 
+  grantsService, 
+  budgetLinesService, 
+  subBudgetLinesService, 
+  engagementsService, 
+  paymentsService, 
+  usersService, 
+  rolesService,
+  appSettingsService,
+  bankAccountsService,
+  bankTransactionsService,
+  prefinancingsService,
+  employeeLoansService
+} from './services/supabaseService';
+import { Dashboard } from './components/Dashboard';
+import BudgetPlanning from './components/BudgetPlanning';
+import BudgetTracking from './components/BudgetTracking';
+import EngagementManager from './components/EngagementManager';
+import EngagementForm from './components/EngagementForm';
+import EngagementDetails from './components/EngagementDetails';
+import PaymentManager from './components/PaymentManager';
+import PaymentForm from './components/PaymentForm';
+import TreasuryManager from './components/TreasuryManager';
+import PrefinancingManager from './components/PrefinancingManager';
+import EmployeeLoanManager from './components/EmployeeLoanManager';
+import Reports from './components/Reports';
+import UserManager from './components/UserManager';
+import UserProfile from './components/UserProfile';
+import GrantManager from './components/GrantManager';
+import LoginForm from './components/LoginForm';
+import { showSuccess, showError, showToast, showLoading, closeLoading } from './utils/alerts';
+import { 
+  Grant, 
+  BudgetLine, 
+  SubBudgetLine, 
+  Engagement, 
+  Payment, 
+  BankAccount, 
+  BankTransaction, 
+  Prefinancing, 
+  EmployeeLoan,
+} from './types';
+import { User, UserRole } from './types/user';
+
+function App() {
+  const { user, userProfile, userRole, loading: authLoading, signOut } = useAuth();
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [selectedGrantId, setSelectedGrantId] = useState<string>('');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  // Data states
+  const [grants, setGrants] = useState<Grant[]>([]);
+  const [budgetLines, setBudgetLines] = useState<BudgetLine[]>([]);
+  const [subBudgetLines, setSubBudgetLines] = useState<SubBudgetLine[]>([]);
+  const [engagements, setEngagements] = useState<Engagement[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
+  const [prefinancings, setPrefinancings] = useState<Prefinancing[]>([]);
+  const [employeeLoans, setEmployeeLoans] = useState<EmployeeLoan[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [roles, setRoles] = useState<UserRole[]>([]);
+
+  const loadAllData = useCallback(async () => {
+    try {
+      setDataLoading(true);
+      showLoading('Chargement des données...');
+
+      // Load all data in parallel
+      const [
+        grantsData,
+        budgetLinesData,
+        subBudgetLinesData,
+        engagementsData,
+        paymentsData,
+        bankAccountsData,
+        bankTransactionsData,
+        prefinancingsData,
+        employeeLoansData,
+        usersData,
+        rolesData,
+        selectedGrantSetting
+      ] = await Promise.all([
+        grantsService.getAll(),
+        budgetLinesService.getAll(),
+        subBudgetLinesService.getAll(),
+        engagementsService.getAll(),
+        paymentsService.getAll(),
+        bankAccountsService.getAll(),
+        bankTransactionsService.getAll(),
+        prefinancingsService.getAll(),
+        employeeLoansService.getAll(),
+        usersService.getAll(),
+        rolesService.getAll(),
+        appSettingsService.get('selectedGrantId')
+      ]);
+
+      setGrants(grantsData);
+      setBudgetLines(budgetLinesData);
+      setSubBudgetLines(subBudgetLinesData);
+      setEngagements(engagementsData);
+      setPayments(paymentsData);
+      setBankAccounts(bankAccountsData);
+      setBankTransactions(bankTransactionsData);
+      setPrefinancings(prefinancingsData);
+      setEmployeeLoans(employeeLoansData);
+      setUsers(usersData);
+      setRoles(rolesData);
+      
+      // Set selected grant
+      if (selectedGrantSetting && grantsData.find(g => g.id === selectedGrantSetting)) {
+        setSelectedGrantId(selectedGrantSetting);
+      } else if (grantsData.length > 0) {
+        const mostRecentGrant = grantsData.reduce((latest, current) => 
+          new Date(current.startDate) > new Date(latest.startDate) ? current : latest
+        );
+        setSelectedGrantId(mostRecentGrant.id);
+      }
+    } catch (error) {
+      console.error('Error loading data:', error);
+      showError('Erreur de chargement', 'Impossible de charger les données. Veuillez rafraîchir la page.');
+    } finally {
+      setDataLoading(false);
+      closeLoading();
+    }
+  }, []);
+
+  // Load data when user is authenticated
+  useEffect(() => {
+    if (userProfile) {
+      loadAllData();
+    }
+  }, [userProfile, loadAllData]);
+
+  // Fallback to localStorage for demo data if Supabase is not available
+  useEffect(() => {
+    if (!userProfile) {
+      const savedData = localStorage.getItem('budgetFlowData');
+      if (savedData) {
+        try {
+          const data = JSON.parse(savedData);
+          if (data.grants) setGrants(data.grants);
+          if (data.budgetLines) setBudgetLines(data.budgetLines);
+          if (data.subBudgetLines) setSubBudgetLines(data.subBudgetLines);
+          if (data.engagements) setEngagements(data.engagements);
+          if (data.payments) setPayments(data.payments);
+          if (data.bankAccounts) setBankAccounts(data.bankAccounts);
+          if (data.bankTransactions) setBankTransactions(data.bankTransactions);
+          if (data.prefinancings) setPrefinancings(data.prefinancings);
+          if (data.employeeLoans) setEmployeeLoans(data.employeeLoans);
+          if (data.users) setUsers(data.users);
+          if (data.roles) setRoles(data.roles);
+          if (data.selectedGrantId) setSelectedGrantId(data.selectedGrantId);
+        } catch (error) {
+          console.error('Error loading saved data:', error);
+        }
+      }
+    }
+  }, [userProfile]);
+
+  // Save selected grant to Supabase
+  useEffect(() => {
+    if (userProfile && selectedGrantId) {
+      try {
+        appSettingsService.set('selectedGrantId', selectedGrantId);
+      } catch (error) {
+        console.error('Error saving selected grant:', error);
+      }
+    }
+  }, [selectedGrantId, userProfile]);
+  
+
+  // Form states
+  const [showEngagementForm, setShowEngagementForm] = useState(false);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [showEngagementDetails, setShowEngagementDetails] = useState(false);
+  const [selectedSubBudgetLine, setSelectedSubBudgetLine] = useState<SubBudgetLine | null>(null);
+  const [selectedEngagement, setSelectedEngagement] = useState<Engagement | null>(null);
+  const [editingEngagement, setEditingEngagement] = useState<Engagement | null>(null);
+  const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
+
+  // Initialize selectedGrantId with the most recent grant
+  useEffect(() => {
+  // Only set selectedGrantId if it's not already set and we have grants
+  if (!selectedGrantId && grants.length > 0) {
+    const mostRecentGrant = grants.reduce((latest, current) => 
+      new Date(current.startDate) > new Date(latest.startDate) ? current : latest
+    );
+    // Only update if different from current value
+    if (mostRecentGrant.id !== selectedGrantId) {
+      setSelectedGrantId(mostRecentGrant.id);
+    }
+  }
+}, [grants, selectedGrantId]); // Dépendances
+
+
+  const isAdmin = () => {
+    return userRole?.code === 'ADMIN';
+  };
+
+  // Filter data by selected grant
+  const getFilteredData = () => {
+    if (!selectedGrantId) {
+      return {
+        budgetLines: [],
+        subBudgetLines: [],
+        engagements: [],
+        payments: [],
+        prefinancings: [],
+        employeeLoans: []
+      };
+    }
+
+    return {
+      budgetLines: budgetLines.filter(line => line.grantId === selectedGrantId),
+      subBudgetLines: subBudgetLines.filter(line => line.grantId === selectedGrantId),
+      engagements: engagements.filter(eng => eng.grantId === selectedGrantId),
+      payments: payments.filter(payment => payment.grantId === selectedGrantId),
+      prefinancings: prefinancings.filter(pref => pref.grantId === selectedGrantId),
+      employeeLoans: employeeLoans.filter(loan => loan.grantId === selectedGrantId)
+    };
+  };
+
+  const filteredData = getFilteredData();
+  const selectedGrant = grants.find(grant => grant.id === selectedGrantId);
+
+  // Fallback: Save to localStorage for demo purposes
+  useEffect(() => {
+    if (!userProfile) {
+      const dataToSave = {
+        grants,
+        budgetLines,
+        subBudgetLines,
+        engagements,
+        payments,
+        bankAccounts,
+        bankTransactions,
+        prefinancings,
+        employeeLoans,
+        users,
+        roles,
+        selectedGrantId
+      };
+      localStorage.setItem('budgetFlowData', JSON.stringify(dataToSave));
+    }
+  }, [grants, budgetLines, subBudgetLines, engagements, payments, bankAccounts, bankTransactions, prefinancings, employeeLoans, users, roles, selectedGrantId]);
+
+  // Automatically update budget line planned amounts when sub-budget lines change
+  useEffect(() => {
+    setBudgetLines(prevBudgetLines => {
+      const updatedBudgetLines = prevBudgetLines.map(budgetLine => {
+        // Find related sub-budget lines
+        const lineSubBudgetLines = subBudgetLines.filter(sub => sub.budgetLineId === budgetLine.id);
+        // Calculate the total planned amount from children
+        const totalPlanned = lineSubBudgetLines.reduce((sum, sub) => sum + (Number(sub.plannedAmount) || 0), 0);
+        
+        // Only return a new object if the amount has actually changed
+        if (budgetLine.plannedAmount !== totalPlanned) {
+          return { ...budgetLine, plannedAmount: totalPlanned };
+        }
+        return budgetLine;
+      });
+      return updatedBudgetLines;
+    });
+  }, [subBudgetLines]); // This effect ONLY depends on subBudgetLines
+
+  // Automatically update grant planned amounts when budget lines change
+  useEffect(() => {
+    setGrants(prevGrants => {
+      const updatedGrants = prevGrants.map(grant => {
+        // Find related budget lines
+        const grantBudgetLines = budgetLines.filter(line => line.grantId === grant.id);
+        // Calculate the total planned amount from children
+        const totalPlanned = grantBudgetLines.reduce((sum, line) => sum + (Number(line.plannedAmount) || 0), 0);
+        
+        // Only return a new object if the amount has actually changed
+        if (grant.plannedAmount !== totalPlanned) {
+          return { ...grant, plannedAmount: totalPlanned };
+        }
+        return grant;
+      });
+      return updatedGrants;
+    });
+  }, [budgetLines]); // This effect ONLY depends on budgetLines
+
+  const handleLogout = () => {
+    signOut();
+    setActiveTab('dashboard');
+    showToast('Déconnexion réussie');
+  };
+
+  // Grant management
+  const handleAddGrant = async (grant: Omit<Grant, 'id'>) => {
+  try {
+    showLoading('Création de la subvention...');
+    
+    // Créer d'abord la subvention
+    const newGrant = await grantsService.create({
+      ...grant,
+      plannedAmount: 0
+    });
+    
+    setGrants(prev => [...prev, newGrant]);
+    
+    // ✅ Créer le compte bancaire UNIQUEMENT si la subvention a des infos bancaires
+    if (grant.bankAccount) {
+      try {
+        const accountId = `grant-${newGrant.id}`;
+        const newBankAccount = await bankAccountsService.create({
+          id: accountId, // Utiliser directement le bon ID
+          name: grant.bankAccount.name,
+          accountNumber: grant.bankAccount.accountNumber,
+          bankName: grant.bankAccount.bankName,
+          balance: grant.bankAccount.balance,
+          lastUpdateDate: new Date().toISOString().split('T')[0]
+        });
+        
+        setBankAccounts(prev => [...prev, newBankAccount]);
+      } catch (error) {
+        console.error('Error creating bank account for grant:', error);
+        // Ne pas bloquer la création de la subvention si le compte échoue
+        showToast('Subvention créée mais erreur avec le compte bancaire', 'warning');
+      }
+    }
+    
+    // Auto-select the new grant if it's the first one or if admin
+    if (grants.length === 0 || isAdmin()) {
+      setSelectedGrantId(newGrant.id);
+    }
+    
+    showSuccess('Subvention ajoutée', 'La nouvelle subvention a été créée avec succès');
+  } catch (error) {
+    showError('Erreur', 'Impossible de créer la subvention');
+  } finally {
+    closeLoading();
+  }
+};
+
+  const handleUpdateGrant = async (id: string, updates: Partial<Grant>) => {
+  try {
+    await grantsService.update(id, updates);
+    setGrants(prev => prev.map(grant => 
+      grant.id === id ? { ...grant, ...updates } : grant
+    ));
+
+    // ✅ Mettre à jour le compte bancaire associé si les infos bancaires changent
+    if (updates.bankAccount) {
+      const accountId = `grant-${id}`;
+      const existingAccount = bankAccounts.find(acc => acc.id === accountId);
+      
+      if (existingAccount) {
+        // Mettre à jour le compte existant
+        await bankAccountsService.update(accountId, {
+          name: updates.bankAccount.name,
+          accountNumber: updates.bankAccount.accountNumber,
+          bankName: updates.bankAccount.bankName,
+          balance: updates.bankAccount.balance
+        });
+        
+        setBankAccounts(prev => prev.map(acc => 
+          acc.id === accountId ? { ...acc, ...updates.bankAccount } : acc
+        ));
+      } else if (updates.bankAccount) {
+        // Créer un nouveau compte si il n'existe pas mais que des infos sont fournies
+        const newBankAccount = await bankAccountsService.create({
+          id: accountId,
+          name: updates.bankAccount.name,
+          accountNumber: updates.bankAccount.accountNumber,
+          bankName: updates.bankAccount.bankName,
+          balance: updates.bankAccount.balance,
+          lastUpdateDate: new Date().toISOString().split('T')[0]
+        });
+        
+        setBankAccounts(prev => [...prev, newBankAccount]);
+      }
+    }
+    
+    showSuccess('Subvention modifiée', 'Les modifications ont été enregistrées');
+  } catch (error) {
+    showError('Erreur', 'Impossible de modifier la subvention');
+  }
+};
+
+ const handleDeleteGrant = async (id: string) => {
+  try {
+    await grantsService.delete(id);
+    setGrants(prev => prev.filter(grant => grant.id !== id));
+    
+    // ✅ Supprimer le compte bancaire associé
+    const accountId = `grant-${id}`;
+    const accountToDelete = bankAccounts.find(acc => acc.id === accountId);
+    if (accountToDelete) {
+      await bankAccountsService.delete(accountId);
+      setBankAccounts(prev => prev.filter(acc => acc.id !== accountId));
+    }
+    
+    if (selectedGrantId === id) {
+      const remainingGrants = grants.filter(grant => grant.id !== id);
+      if (remainingGrants.length > 0) {
+        const mostRecent = remainingGrants.reduce((latest, current) => 
+          new Date(current.startDate) > new Date(latest.startDate) ? current : latest
+        );
+        setSelectedGrantId(mostRecent.id);
+      } else {
+        setSelectedGrantId('');
+      }
+    }
+    showSuccess('Subvention supprimée', 'La subvention a été supprimée avec succès');
+  } catch (error) {
+    showError('Erreur', 'Impossible de supprimer la subvention');
+  }
+};
+  // Budget line management
+  const handleAddBudgetLine = async (budgetLine: Omit<BudgetLine, 'id' | 'engagedAmount' | 'availableAmount'>) => {
+    try {
+      const newBudgetLine = await budgetLinesService.create({
+        ...budgetLine,
+        engagedAmount: 0,
+        availableAmount: budgetLine.notifiedAmount
+      });
+      setBudgetLines(prev => [...prev, newBudgetLine]);
+      showSuccess('Ligne budgétaire ajoutée', 'La nouvelle ligne budgétaire a été créée');
+    } catch (error) {
+      showError('Erreur', 'Impossible de créer la ligne budgétaire');
+    }
+  };
+
+  const handleUpdateBudgetLine = async (id: string, updates: Partial<BudgetLine>) => {
+    try {
+      await budgetLinesService.update(id, updates);
+      setBudgetLines(prev => prev.map(line => 
+        line.id === id ? { ...line, ...updates } : line
+      ));
+    } catch (error) {
+      showError('Erreur', 'Impossible de modifier la ligne budgétaire');
+    }
+  };
+
+  const handleDeleteBudgetLine = async (id: string) => {
+    try {
+      await budgetLinesService.delete(id);
+      setBudgetLines(prev => prev.filter(line => line.id !== id));
+      setSubBudgetLines(prev => prev.filter(line => line.budgetLineId !== id));
+      showSuccess('Ligne budgétaire supprimée', 'La ligne budgétaire et ses sous-lignes ont été supprimées');
+    } catch (error) {
+      showError('Erreur', 'Impossible de supprimer la ligne budgétaire');
+    }
+  };
+
+  // Sub budget line management
+  const handleAddSubBudgetLine = async (subBudgetLine: Omit<SubBudgetLine, 'id' | 'engagedAmount' | 'availableAmount'>) => {
+    try {
+      const newSubBudgetLine = await subBudgetLinesService.create({
+        ...subBudgetLine,
+        engagedAmount: 0,
+        availableAmount: subBudgetLine.notifiedAmount
+      });
+      setSubBudgetLines(prev => [...prev, newSubBudgetLine]);
+      showSuccess('Sous-ligne budgétaire ajoutée', 'La nouvelle sous-ligne budgétaire a été créée');
+    } catch (error) {
+      showError('Erreur', 'Impossible de créer la sous-ligne budgétaire');
+    }
+  };
+
+  const handleUpdateSubBudgetLine = async (id: string, updates: Partial<SubBudgetLine>) => {
+    try {
+      await subBudgetLinesService.update(id, updates);
+      setSubBudgetLines(prev => prev.map(line => 
+        line.id === id ? { ...line, ...updates } : line
+      ));
+    } catch (error) {
+      showError('Erreur', 'Impossible de modifier la sous-ligne budgétaire');
+    }
+  };
+
+  const handleDeleteSubBudgetLine = async (id: string) => {
+    try {
+      await subBudgetLinesService.delete(id);
+      setSubBudgetLines(prev => prev.filter(line => line.id !== id));
+      showSuccess('Sous-ligne budgétaire supprimée', 'La sous-ligne budgétaire a été supprimée');
+    } catch (error) {
+      showError('Erreur', 'Impossible de supprimer la sous-ligne budgétaire');
+    }
+  };
+
+  // Engagement management
+  const handleAddEngagement = async (engagement: Omit<Engagement, 'id'>) => {
+    try {
+      const newEngagement = await engagementsService.create(engagement);
+      setEngagements(prev => [...prev, newEngagement]);
+
+      // Update sub budget line amounts
+      const subBudgetLine = subBudgetLines.find(line => line.id === engagement.subBudgetLineId);
+      if (subBudgetLine) {
+        const newEngagedAmount = subBudgetLine.engagedAmount + engagement.amount;
+        const updates = {
+          engagedAmount: newEngagedAmount,
+          availableAmount: subBudgetLine.notifiedAmount - newEngagedAmount
+        };
+        await subBudgetLinesService.update(engagement.subBudgetLineId, updates);
+        setSubBudgetLines(prev => prev.map(line => 
+          line.id === engagement.subBudgetLineId ? { ...line, ...updates } : line
+        ));
+      }
+
+      // Update budget line amounts
+      const budgetLine = budgetLines.find(line => line.id === engagement.budgetLineId);
+      if (budgetLine) {
+        const newEngagedAmount = budgetLine.engagedAmount + engagement.amount;
+        const updates = {
+          engagedAmount: newEngagedAmount,
+          availableAmount: budgetLine.notifiedAmount - newEngagedAmount
+        };
+        await budgetLinesService.update(engagement.budgetLineId, updates);
+        setBudgetLines(prev => prev.map(line => 
+          line.id === engagement.budgetLineId ? { ...line, ...updates } : line
+        ));
+      }
+
+      showSuccess('Engagement ajouté', 'Le nouvel engagement a été enregistré');
+      setShowEngagementForm(false);
+    } catch (error) {
+      showError('Erreur', 'Impossible de créer l\'engagement');
+    }
+  };
+
+  const handleUpdateEngagement = async (id: string, updates: Partial<Engagement>) => {
+  try {
+    const oldEngagement = engagements.find(eng => eng.id === id);
+    if (!oldEngagement) return;
+
+    await engagementsService.update(id, updates);
+    setEngagements(prev => prev.map(eng => 
+      eng.id === id ? { ...eng, ...updates } : eng
+    ));
+
+    // If amount changed, update budget line amounts
+    if (updates.amount !== undefined && updates.amount !== oldEngagement.amount) {
+      const amountDifference = updates.amount - oldEngagement.amount;
+
+      // Update sub budget line
+      const subBudgetLine = subBudgetLines.find(line => line.id === oldEngagement.subBudgetLineId);
+      if (subBudgetLine) {
+        const newEngagedAmount = subBudgetLine.engagedAmount + amountDifference;
+        const subUpdates = {
+          engagedAmount: newEngagedAmount,
+          availableAmount: subBudgetLine.notifiedAmount - newEngagedAmount
+        };
+        await subBudgetLinesService.update(oldEngagement.subBudgetLineId, subUpdates);
+        setSubBudgetLines(prev => prev.map(line => 
+          line.id === oldEngagement.subBudgetLineId ? { ...line, ...subUpdates } : line
+        ));
+      }
+
+      // Update budget line - FIXED HERE
+      const budgetLine = budgetLines.find(line => line.id === oldEngagement.budgetLineId);
+      if (budgetLine) {
+        const newEngagedAmount = budgetLine.engagedAmount + amountDifference; // ✅ Use budgetLine instead of line
+        const budgetUpdates = {
+          engagedAmount: newEngagedAmount,
+          availableAmount: budgetLine.notifiedAmount - newEngagedAmount
+        };
+        await budgetLinesService.update(oldEngagement.budgetLineId, budgetUpdates);
+        setBudgetLines(prev => prev.map(line => 
+          line.id === oldEngagement.budgetLineId ? { ...line, ...budgetUpdates } : line
+        ));
+      }
+    }
+
+    showSuccess('Engagement modifié', 'Les modifications ont été enregistrées');
+    setShowEngagementForm(false);
+    setEditingEngagement(null);
+  } catch (error) {
+    showError('Erreur', 'Impossible de modifier l\'engagement');
+  }
+};
+
+  // Payment management
+  const handleAddPayment = async (payment: Omit<Payment, 'id'>) => {
+    try {
+      const newPayment = await paymentsService.create(payment);
+      setPayments(prev => [...prev, newPayment]);
+      showSuccess('Paiement ajouté', 'Le nouveau paiement a été enregistré');
+      setShowPaymentForm(false);
+    } catch (error) {
+      showError('Erreur', 'Impossible de créer le paiement');
+    }
+  };
+
+  const handleUpdatePayment = async (id: string, updates: Partial<Payment>) => {
+    try {
+      await paymentsService.update(id, updates);
+      setPayments(prev => prev.map(payment => 
+        payment.id === id ? { ...payment, ...updates } : payment
+      ));
+      showSuccess('Paiement modifié', 'Les modifications ont été enregistrées');
+    } catch (error) {
+      showError('Erreur', 'Impossible de modifier le paiement');
+    }
+  };
+
+  // Treasury management
+  const handleDeleteBankAccount = async (id: string) => {
+    // Ne pas permettre la suppression des comptes liés aux subventions
+    if (id.startsWith('grant-')) {
+      showError('Suppression impossible', 'Ce compte est lié à une subvention. Modifiez la subvention pour changer les informations bancaires.');
+      return;
+    }
+    
+    try {
+      await bankAccountsService.delete(id);
+      setBankAccounts(prev => prev.filter(account => account.id !== id));
+      showSuccess('Compte supprimé', 'Le compte bancaire a été supprimé');
+    } catch (error) {
+      showError('Erreur', 'Impossible de supprimer le compte bancaire');
+    }
+  };
+
+  const handleAddBankTransaction = async (transaction: Omit<BankTransaction, 'id'>) => {
+    try {
+      const newTransaction = await bankTransactionsService.create(transaction);
+      setBankTransactions(prev => [...prev, newTransaction]);
+    
+      // Mettre à jour le solde du compte bancaire
+      const account = bankAccounts.find(acc => acc.id === transaction.accountId);
+      if (account) {
+        const newBalance = transaction.type === 'credit' 
+          ? account.balance + transaction.amount
+          : account.balance - transaction.amount;
+      
+        await bankAccountsService.update(transaction.accountId, {
+          balance: newBalance,
+          lastUpdateDate: new Date().toISOString().split('T')[0]
+        });
+        
+        setBankAccounts(prev => prev.map(acc => 
+          acc.id === transaction.accountId 
+            ? { ...acc, balance: newBalance, lastUpdateDate: new Date().toISOString().split('T')[0] }
+            : acc
+        ));
+      
+        // Si c'est un compte lié à une subvention, mettre à jour aussi la subvention
+        if (transaction.accountId.startsWith('grant-')) {
+          const grantId = transaction.accountId.replace('grant-', '');
+          const grant = grants.find(g => g.id === grantId);
+          if (grant && grant.bankAccount) {
+            await grantsService.update(grantId, {
+              bankAccount: { ...grant.bankAccount, balance: newBalance }
+            });
+            setGrants(prev => prev.map(g => 
+              g.id === grantId && g.bankAccount
+                ? { ...g, bankAccount: { ...g.bankAccount, balance: newBalance } }
+                : g
+            ));
+          }
+        }
+      }
+      
+      showSuccess('Transaction ajoutée', 'La transaction a été enregistrée et le solde mis à jour');
+    } catch (error) {
+      showError('Erreur', 'Impossible d\'ajouter la transaction');
+    }
+  };
+
+  // Prefinancing management
+  const handleAddPrefinancing = async (prefinancing: Omit<Prefinancing, 'id'>) => {
+    try {
+      const newPrefinancing = await prefinancingsService.create(prefinancing);
+      setPrefinancings(prev => [...prev, newPrefinancing]);
+      showSuccess('Préfinancement ajouté', 'La demande de préfinancement a été enregistrée');
+    } catch (error) {
+      showError('Erreur', 'Impossible de créer le préfinancement');
+    }
+  };
+
+  const handleUpdatePrefinancing = async (id: string, updates: Partial<Prefinancing>) => {
+    try {
+      await prefinancingsService.update(id, updates);
+      setPrefinancings(prev => prev.map(pref => 
+        pref.id === id ? { ...pref, ...updates } : pref
+      ));
+      showSuccess('Préfinancement modifié', 'Les modifications ont été enregistrées');
+    } catch (error) {
+      showError('Erreur', 'Impossible de modifier le préfinancement');
+    }
+  };
+
+  const handleAddPrefinancingRepayment = async (prefinancingId: string, repayment: { date: string; amount: number; reference: string }) => {
+    try {
+      const prefinancing = prefinancings.find(p => p.id === prefinancingId);
+      if (!prefinancing) return;
+      
+      const newRepayment = {
+        ...repayment,
+        id: String(Date.now())
+      };
+      const updatedRepayments = [...(prefinancing.repayments || []), newRepayment];
+      const totalRepaid = updatedRepayments.reduce((sum, rep) => sum + rep.amount, 0);
+      const newStatus = totalRepaid >= prefinancing.amount ? 'repaid' : prefinancing.status;
+      
+      await prefinancingsService.update(prefinancingId, {
+        repayments: updatedRepayments,
+        status: newStatus
+      });
+      
+      setPrefinancings(prev => prev.map(pref => {
+        if (pref.id === prefinancingId) {
+          return {
+            ...pref,
+            repayments: updatedRepayments,
+            status: newStatus
+          };
+        }
+        return pref;
+      }));
+      
+      showSuccess('Remboursement ajouté', 'Le remboursement a été enregistré');
+    } catch (error) {
+      showError('Erreur', 'Impossible d\'ajouter le remboursement');
+    }
+  };
+
+  // Employee loan management
+  const handleAddEmployeeLoan = async (loan: Omit<EmployeeLoan, 'id'>) => {
+    try {
+      const newLoan = await employeeLoansService.create(loan);
+      setEmployeeLoans(prev => [...prev, newLoan]);
+      showSuccess('Prêt employé ajouté', 'La demande de prêt a été enregistrée');
+    } catch (error) {
+      showError('Erreur', 'Impossible de créer le prêt employé');
+    }
+  };
+
+  const handleUpdateEmployeeLoan = async (id: string, updates: Partial<EmployeeLoan>) => {
+    try {
+      await employeeLoansService.update(id, updates);
+      setEmployeeLoans(prev => prev.map(loan => 
+        loan.id === id ? { ...loan, ...updates } : loan
+      ));
+      showSuccess('Prêt employé modifié', 'Les modifications ont été enregistrées');
+    } catch (error) {
+      showError('Erreur', 'Impossible de modifier le prêt employé');
+    }
+  };
+
+  const handleAddEmployeeLoanRepayment = async (loanId: string, repayment: { date: string; amount: number; reference: string }) => {
+    try {
+      const loan = employeeLoans.find(l => l.id === loanId);
+      if (!loan) return;
+      
+      const newRepayment = {
+        ...repayment,
+        id: String(Date.now())
+      };
+      const updatedRepayments = [...loan.repayments, newRepayment];
+      const totalRepaid = updatedRepayments.reduce((sum, rep) => sum + rep.amount, 0);
+      const newStatus = totalRepaid >= loan.amount ? 'completed' : 'active';
+      
+      await employeeLoansService.update(loanId, {
+        repayments: updatedRepayments,
+        status: newStatus
+      });
+      
+      setEmployeeLoans(prev => prev.map(l => {
+        if (l.id === loanId) {
+          return {
+            ...l,
+            repayments: updatedRepayments,
+            status: newStatus
+          };
+        }
+        return l;
+      }));
+      
+      showSuccess('Remboursement ajouté', 'Le remboursement a été enregistré');
+    } catch (error) {
+      showError('Erreur', 'Impossible d\'ajouter le remboursement');
+    }
+  };
+
+  // Bank account management
+  const handleUpdateBankAccount = async (id: string, updates: Partial<BankAccount>) => {
+    try {
+      await bankAccountsService.update(id, updates);
+      setBankAccounts(prev => prev.map(account => 
+        account.id === id ? { ...account, ...updates } : account
+      ));
+      
+      // Si c'est un compte lié à une subvention, mettre à jour aussi la subvention
+      if (id.startsWith('grant-')) {
+        const grantId = id.replace('grant-', '');
+        const grant = grants.find(g => g.id === grantId);
+        if (grant && grant.bankAccount) {
+          await grantsService.update(grantId, {
+            bankAccount: { 
+              ...grant.bankAccount, 
+              ...updates,
+              balance: updates.balance !== undefined ? updates.balance : grant.bankAccount.balance
+            }
+          });
+          setGrants(prev => prev.map(g => 
+            g.id === grantId && g.bankAccount
+              ? { 
+                  ...g, 
+                  bankAccount: { 
+                    ...g.bankAccount, 
+                    ...updates,
+                    balance: updates.balance !== undefined ? updates.balance : g.bankAccount.balance
+                  } 
+                }
+              : g
+          ));
+        }
+      }
+      
+      showSuccess('Compte modifié', 'Les modifications ont été enregistrées');
+    } catch (error) {
+      showError('Erreur', 'Impossible de modifier le compte bancaire');
+    }
+  };
+
+  // User management
+  const handleAddUser = async (user: Omit<User, 'id' | 'createdAt' | 'updatedAt'>) => {
+    try {
+      // For now, we'll add to local state since user creation requires auth signup
+      const newUser = {
+        ...user,
+        id: String(users.length + 1),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      setUsers(prev => [...prev, newUser]);
+      showSuccess('Utilisateur ajouté', 'Le nouvel utilisateur a été créé');
+    } catch (error) {
+      showError('Erreur', 'Impossible de créer l\'utilisateur');
+    }
+  };
+
+  const handleUpdateUser = async (id: string, updates: Partial<User>) => {
+    try {
+      await usersService.update(id, updates);
+      setUsers(prev => prev.map(user => 
+        user.id === id ? { ...user, ...updates } : user
+      ));
+      showSuccess('Utilisateur modifié', 'Les modifications ont été enregistrées');
+    } catch (error) {
+      showError('Erreur', 'Impossible de modifier l\'utilisateur');
+    }
+  };
+
+  const handleDeleteUser = (id: string) => {
+    setUsers(prev => prev.filter(user => user.id !== id));
+    showSuccess('Utilisateur supprimé', 'L\'utilisateur a été supprimé');
+  };
+
+  // Role management
+  const handleAddRole = async (role: Omit<UserRole, 'id' | 'createdAt' | 'updatedAt'>) => {
+    try {
+      const newRole = await rolesService.create(role);
+      setRoles(prev => [...prev, newRole]);
+      showSuccess('Rôle ajouté', 'Le nouveau rôle a été créé');
+    } catch (error) {
+      showError('Erreur', 'Impossible de créer le rôle');
+    }
+  };
+
+  const handleUpdateRole = async (id: string, updates: Partial<UserRole>) => {
+    try {
+      await rolesService.update(id, updates);
+      setRoles(prev => prev.map(role => 
+        role.id === id ? { ...role, ...updates } : role
+      ));
+      showSuccess('Rôle modifié', 'Les modifications ont été enregistrées');
+    } catch (error) {
+      showError('Erreur', 'Impossible de modifier le rôle');
+    }
+  };
+
+  const handleDeleteRole = async (id: string) => {
+    try {
+      await rolesService.delete(id);
+      setRoles(prev => prev.filter(role => role.id !== id));
+      showSuccess('Rôle supprimé', 'Le rôle a été supprimé');
+    } catch (error) {
+      showError('Erreur', 'Impossible de supprimer le rôle');
+    }
+  };
+
+
+  const handleEditEngagement = (engagement: Engagement) => {
+    const subBudgetLine = subBudgetLines.find(line => line.id === engagement.subBudgetLineId);
+    if (subBudgetLine) {
+      setSelectedSubBudgetLine(subBudgetLine);
+      setEditingEngagement(engagement);
+      setShowEngagementForm(true);
+    }
+  };
+
+  const handleViewEngagements = (subBudgetLineId: string) => {
+    const subBudgetLine = subBudgetLines.find(line => line.id === subBudgetLineId);
+    if (subBudgetLine) {
+      setSelectedSubBudgetLine(subBudgetLine);
+      setShowEngagementDetails(true);
+    }
+  };
+
+  const handleCreatePaymentFromEngagement = (engagementId: string) => {
+    const engagement = engagements.find(eng => eng.id === engagementId);
+    if (engagement) {
+      setSelectedEngagement(engagement);
+      setShowPaymentForm(true);
+    }
+  };
+
+  const handleViewPaymentDetails = (paymentId: string) => {
+    const payment = payments.find(p => p.id === paymentId);
+    if (payment) {
+      setEditingPayment(payment);
+      const engagement = engagements.find(eng => eng.id === payment.engagementId);
+      if (engagement) {
+        setSelectedEngagement(engagement);
+        setShowPaymentForm(true);
+      }
+    }
+  };
+
+  // Show loading screen while checking authentication
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="flex items-center justify-center w-16 h-16 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl mx-auto mb-4">
+            <Target className="w-8 h-8 text-white" />
+          </div>
+          <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement de BudgetFlow...</p>
+          <p className="text-xs text-gray-500 mt-2">Vérification de l'authentification...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user && !authLoading) {
+    return <LoginForm />;
+  }
+
+  if (user && !userProfile && !authLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="flex items-center justify-center w-16 h-16 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl mx-auto mb-4">
+            <Target className="w-8 h-8 text-white" />
+          </div>
+          <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement du profil utilisateur...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading screen while loading data
+  if (dataLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="flex items-center justify-center w-16 h-16 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl mx-auto mb-4">
+            <Target className="w-8 h-8 text-white" />
+          </div>
+          <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement des données...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const menuItems = [
+    { id: 'dashboard', label: 'Tableau de Bord', icon: BarChart3, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT'] },
+    { id: 'grants', label: 'Gestion des Subventions', icon: Banknote, roles: ['ADMIN', 'FINANCE_MANAGER'] },
+    { id: 'planning', label: 'Planification', icon: Target, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER'] },
+    { id: 'tracking', label: 'Suivi Budgétaire', icon: BarChart3, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
+    { id: 'engagements', label: 'Engagements', icon: FileText, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'READ_ONLY'] },
+    { id: 'payments', label: 'Paiements', icon: CreditCard, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'READ_ONLY'] },
+    { id: 'treasury', label: 'Trésorerie', icon: Banknote, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
+    { id: 'prefinancing', label: 'Préfinancements', icon: ArrowRightLeft, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
+    { id: 'employee-loans', label: 'Prêts Employés', icon: DollarSign, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
+    { id: 'reports', label: 'Rapports', icon: FileText, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
+    { id: 'config', label: 'Configuration', icon: Settings, roles: ['ADMIN'] },
+    { id: 'profile', label: 'Mon Profil', icon: Users, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
+    { id: 'users', label: 'Utilisateurs', icon: Users, roles: ['ADMIN'] },
+
+  ];
+
+  const availableMenuItems = menuItems.filter(item => 
+    userRole && item.roles.includes(userRole.code)
+  );
+
+  if (!userProfile) {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center">
+      <div className="text-center">
+        <p className="text-gray-600">Profil utilisateur non disponible</p>
+      </div>
+    </div>
+  );
+}
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center space-x-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl">
+                  <Target className="w-6 h-6 text-white" />
+                </div>
+                <div className="p-2 bg-gradient-to-r  to-purple-600 rounded-xl">
+                <div className="relative w-20 h-15">
+                  <img
+                    src="/logo.png"
+                    alt="Logo"
+                    className="object-contain"
+                  />
+                </div>
+              </div>
+                <div className="hidden sm:block">
+                  <h1 className="text-xl font-bold text-gray-900">BudgetFlow</h1>
+                  <p className="text-xs text-gray-500">Gestion Budgétaire</p>
+                </div>
+              </div>
+
+              {/* Global Grant Selector for Admin */}
+              {isAdmin() && selectedGrant && (
+                <div className="hidden md:flex items-center space-x-3 bg-blue-50 px-4 py-2 rounded-xl border border-blue-200">
+                  <Settings className="w-4 h-4 text-blue-600" />
+                  <div>
+                    <p className="text-xs text-blue-600 font-medium">Subvention Active</p>
+                    <p className="text-sm font-semibold text-blue-900">{selectedGrant.name}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center space-x-4">
+              {/* Mobile menu button */}
+              <button
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                className="lg:hidden p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+              </button>
+              
+              {/* Desktop user info and logout */}
+              <div className="text-right">
+                <p className="text-sm font-medium text-gray-900">
+                  {userProfile.firstName} {userProfile.lastName}
+                </p>
+                <p className="text-xs text-gray-500">{userRole?.name}</p>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="hidden lg:block p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                title="Déconnexion"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex space-x-8">
+          {/* Sidebar */}
+          <div className={`${isMobileMenuOpen ? 'block' : 'hidden'} lg:block w-64 flex-shrink-0 fixed lg:relative inset-y-0 left-0 z-50 lg:z-auto bg-white lg:bg-transparent overflow-y-auto pt-16 lg:pt-0`}>
+            <nav className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 h-full lg:h-auto max-h-screen lg:max-h-none overflow-y-auto">
+              {/* Mobile Header Info */}
+              <div className="lg:hidden mb-6 pb-4 border-b border-gray-200">
+                <div className="flex items-center space-x-3 mb-4">
+                  <div className="p-2 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl">
+                    <Target className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <h1 className="text-lg font-bold text-gray-900">BudgetFlow</h1>
+                    <p className="text-xs text-gray-500">Gestion Budgétaire</p>
+                  </div>
+                </div>
+                
+                <div className="bg-blue-50 px-3 py-2 rounded-lg">
+                  <p className="text-sm font-medium text-gray-900">
+                    {userProfile.firstName} {userProfile.lastName}
+                  </p>
+                  <p className="text-xs text-gray-500">{userRole?.name}</p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {availableMenuItems.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        setActiveTab(item.id);
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-left transition-all duration-200 ${
+                        activeTab === item.id
+                          ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg'
+                          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                      }`}
+                    >
+                      <Icon className="w-5 h-5" />
+                      <span className="font-medium">{item.label}</span>
+                    </button>
+                  );
+                })}
+                
+               
+                
+                {/* Logout Button - Only for mobile */}
+                <div className="lg:hidden pt-4 border-t border-gray-200">
+                  <button
+                    onClick={() => {
+                      handleLogout();
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-left transition-all duration-200 text-red-600 hover:bg-red-50"
+                  >
+                    <LogOut className="w-5 h-5" />
+                    <span className="font-medium">Déconnexion</span>
+                  </button>
+                </div>
+              </div>
+            </nav>
+          </div>
+
+          {/* Mobile overlay */}
+          {isMobileMenuOpen && (
+            <div 
+              className="lg:hidden fixed inset-0 bg-black bg-opacity-50 z-40"
+              onClick={() => setIsMobileMenuOpen(false)}
+            />
+          )}
+
+          {/* Main Content */}
+          <div className="flex-1">
+            {activeTab === 'dashboard' && (
+              <Dashboard 
+                grants={[selectedGrant].filter(Boolean) as Grant[]}
+                budgetLines={filteredData.budgetLines}
+                subBudgetLines={filteredData.subBudgetLines}
+                engagements={filteredData.engagements}
+              />
+            )}
+
+            {activeTab === 'grants' && (
+              <GrantManager
+                grants={grants}
+                budgetLines={budgetLines}
+                subBudgetLines={subBudgetLines}
+                onAddGrant={handleAddGrant}
+                onUpdateGrant={handleUpdateGrant}
+                onDeleteGrant={handleDeleteGrant}
+                onUpdateBudgetLine={handleUpdateBudgetLine}
+                onUpdateSubBudgetLine={handleUpdateSubBudgetLine}
+              />
+            )}
+
+            {activeTab === 'config' && (
+              <GrantSelector
+                grants={grants}
+                selectedGrantId={selectedGrantId}
+                onSelectGrant={setSelectedGrantId}
+                isAdmin={isAdmin()}
+              />
+            )}
+
+            {activeTab === 'profile' && (
+              <UserProfile />
+            )}
+
+            {activeTab === 'planning' && (
+              <BudgetPlanning
+                budgetLines={filteredData.budgetLines}
+                subBudgetLines={filteredData.subBudgetLines}
+                grants={[selectedGrant].filter(Boolean) as Grant[]}
+                onAddBudgetLine={handleAddBudgetLine}
+                onAddSubBudgetLine={handleAddSubBudgetLine}
+                onUpdateBudgetLine={handleUpdateBudgetLine}
+                onUpdateSubBudgetLine={handleUpdateSubBudgetLine}
+                onDeleteBudgetLine={handleDeleteBudgetLine}
+                onDeleteSubBudgetLine={handleDeleteSubBudgetLine}
+              />
+            )}
+
+            {activeTab === 'tracking' && (
+              <BudgetTracking
+                budgetLines={filteredData.budgetLines}
+                subBudgetLines={filteredData.subBudgetLines}
+                grants={[selectedGrant].filter(Boolean) as Grant[]}
+                engagements={filteredData.engagements}
+                selectedGrantId={selectedGrantId}
+                onViewEngagements={handleViewEngagements}
+              />
+            )}
+
+            {activeTab === 'engagements' && (
+              <EngagementManager
+                engagements={filteredData.engagements}
+                budgetLines={filteredData.budgetLines}
+                subBudgetLines={filteredData.subBudgetLines}
+                grants={[selectedGrant].filter(Boolean) as Grant[]}
+                onAddEngagement={handleAddEngagement}
+                onUpdateEngagement={handleUpdateEngagement}
+              />
+            )}
+
+            {activeTab === 'payments' && (
+              <PaymentManager
+                payments={filteredData.payments}
+                engagements={filteredData.engagements}
+                budgetLines={filteredData.budgetLines}
+                grants={[selectedGrant].filter(Boolean) as Grant[]}
+                bankAccounts={bankAccounts}
+                selectedGrantId={selectedGrantId}
+                onAddPayment={handleAddPayment}
+                onUpdatePayment={handleUpdatePayment}
+                onViewPaymentDetails={handleViewPaymentDetails}
+                onCreatePaymentFromEngagement={handleCreatePaymentFromEngagement}
+              />
+            )}
+
+            {activeTab === 'treasury' && (
+              <TreasuryManager
+                payments={filteredData.payments}
+                bankAccounts={bankAccounts}
+                bankTransactions={bankTransactions}
+                selectedGrant={selectedGrant}
+                onDeleteBankAccount={handleDeleteBankAccount}
+                onAddBankTransaction={handleAddBankTransaction}
+                onUpdateBankAccount={handleUpdateBankAccount}
+              />
+            )}
+
+            {activeTab === 'prefinancing' && (
+              <PrefinancingManager
+                prefinancings={filteredData.prefinancings}
+                budgetLines={filteredData.budgetLines}
+                subBudgetLines={filteredData.subBudgetLines}
+                grants={[selectedGrant].filter(Boolean) as Grant[]}
+                bankAccounts={bankAccounts}
+                onAddPrefinancing={handleAddPrefinancing}
+                onUpdatePrefinancing={handleUpdatePrefinancing}
+                onAddPrefinancingRepayment={handleAddPrefinancingRepayment}
+              />
+            )}
+
+            {activeTab === 'employee-loans' && (
+              <EmployeeLoanManager
+                loans={filteredData.employeeLoans}
+                budgetLines={filteredData.budgetLines}
+                subBudgetLines={filteredData.subBudgetLines}
+                grants={[selectedGrant].filter(Boolean) as Grant[]}
+                selectedGrantId={selectedGrantId}
+                onAddLoan={handleAddEmployeeLoan}
+                onUpdateLoan={handleUpdateEmployeeLoan}
+                onAddRepayment={handleAddEmployeeLoanRepayment}
+              />
+            )}
+
+            {activeTab === 'reports' && (
+              <Reports
+                grants={[selectedGrant].filter(Boolean) as Grant[]}
+                budgetLines={filteredData.budgetLines}
+                subBudgetLines={filteredData.subBudgetLines}
+                expenses={filteredData.engagements}
+                payments={filteredData.payments}
+                employeeLoans={filteredData.employeeLoans}
+                prefinancings={filteredData.prefinancings}
+              />
+            )}
+
+            {activeTab === 'users' && (
+              <UserManager
+                users={users}
+                roles={roles}
+                currentUser={userProfile}
+                onAddUser={handleAddUser}
+                onUpdateUser={handleUpdateUser}
+                onDeleteUser={handleDeleteUser}
+                onAddRole={handleAddRole}
+                onUpdateRole={handleUpdateRole}
+                onDeleteRole={handleDeleteRole}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Modals */}
+      {showEngagementForm && selectedSubBudgetLine && (
+        <EngagementForm
+          subBudgetLine={selectedSubBudgetLine}
+          budgetLine={budgetLines.find(line => line.id === selectedSubBudgetLine.budgetLineId)!}
+          grant={grants.find(grant => grant.id === selectedSubBudgetLine.grantId)!}
+          onSave={handleAddEngagement}
+          onCancel={() => {
+            setShowEngagementForm(false);
+            setSelectedSubBudgetLine(null);
+            setEditingEngagement(null);
+          }}
+          editingEngagement={editingEngagement}
+        />
+      )}
+
+      {showPaymentForm && selectedEngagement && (
+        <PaymentForm
+          engagement={selectedEngagement}
+          subBudgetLine={subBudgetLines.find(line => line.id === selectedEngagement.subBudgetLineId)!}
+          budgetLine={budgetLines.find(line => line.id === selectedEngagement.budgetLineId)!}
+          grant={grants.find(grant => grant.id === selectedEngagement.grantId)!}
+          bankAccounts={bankAccounts}
+          existingPayments={payments}
+          onSave={handleAddPayment}
+          onCancel={() => {
+            setShowPaymentForm(false);
+            setSelectedEngagement(null);
+            setEditingPayment(null);
+          }}
+          editingPayment={editingPayment}
+        />
+      )}
+
+      {showEngagementDetails && selectedSubBudgetLine && (
+        <EngagementDetails
+          subBudgetLine={selectedSubBudgetLine}
+          budgetLine={budgetLines.find(line => line.id === selectedSubBudgetLine.budgetLineId)!}
+          engagements={engagements.filter(eng => eng.subBudgetLineId === selectedSubBudgetLine.id)}
+          onClose={() => {
+            setShowEngagementDetails(false);
+            setSelectedSubBudgetLine(null);
+          }}
+          onEditEngagement={handleEditEngagement}
+        />
+      )}
+    </div>
+  );
+}
+
+export default App;
