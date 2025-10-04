@@ -11,10 +11,17 @@ interface DashboardProps {
 
 export const Dashboard: React.FC<DashboardProps> = ({ grants, budgetLines, subBudgetLines, engagements }) => {
   const activeGrants = grants.filter(grant => grant.status === 'active');
+
+  const formatPercentage = (rate: number) => {
+    if (rate === 0) return '0%';
+    if (rate < 0.01) return '< 0.01%';
+    if (rate < 0.1) return rate.toFixed(2) + '%';
+    if (rate < 1) return rate.toFixed(1) + '%';
+    return rate.toFixed(1) + '%';
+  };
   
   // Fonction pour formater les montants avec la devise dynamique
-  const formatAmount = (amount: number, currencyCode?: string) => {
-    // Déterminer la devise à utiliser (priorité: subvention active, puis première subvention, puis EUR par défaut)
+   const formatAmount = (amount: number, currencyCode?: string) => {
     const defaultCurrency = activeGrants.length > 0 
       ? activeGrants[0].currency 
       : (grants.length > 0 ? grants[0].currency : 'EUR');
@@ -25,19 +32,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ grants, budgetLines, subBu
       style: 'currency', 
       currency: currency,
       minimumFractionDigits: 0,
-      maximumFractionDigits: 2
+      maximumFractionDigits: 0
     });
   };
 
+  // CALCULS PRINCIPAUX - AJOUT DE totalSpent
   const totalGrantAmount = activeGrants.reduce((sum, grant) => sum + (Number(grant.totalAmount) || 0), 0);
   const totalAllocated = subBudgetLines.reduce((sum, line) => sum + (Number(line.notifiedAmount) || 0), 0);
   const totalEngaged = subBudgetLines.reduce((sum, line) => sum + (Number(line.engagedAmount) || 0), 0);
+  const totalSpent = subBudgetLines.reduce((sum, line) => sum + (Number(line.spentAmount) || 0), 0); // NOUVEAU
   const totalAvailable = subBudgetLines.reduce((sum, line) => sum + (Number(line.availableAmount) || 0), 0);
 
-  const executionRate = totalAllocated > 0 ? ((Number(totalEngaged) || 0) / (Number(totalAllocated) || 1)) * 100 : 0;
+  // INDICATEURS - AJOUT DU TAUX D'EXÉCUTION
+  const engagementRate = totalAllocated > 0 ? (totalEngaged / totalAllocated) * 100 : 0;
+  const executionRate = totalEngaged > 0 ? (totalSpent / totalEngaged) * 100 : 0; // NOUVEAU
+  const allocationRate = totalGrantAmount > 0 ? (totalAllocated / totalGrantAmount) * 100 : 0;
 
   const pendingEngagements = engagements.filter(engagement => engagement.status === 'pending');
   const recentEngagements = engagements.slice(0, 5);
+
+  // const totalGrantAmount = activeGrants.reduce((sum, grant) => sum + (Number(grant.totalAmount) || 0), 0);
+  // const totalAllocated = subBudgetLines.reduce((sum, line) => sum + (Number(line.notifiedAmount) || 0), 0);
+  // const totalEngaged = subBudgetLines.reduce((sum, line) => sum + (Number(line.engagedAmount) || 0), 0);
+  // const totalAvailable = subBudgetLines.reduce((sum, line) => sum + (Number(line.availableAmount) || 0), 0);
+
+  // const executionRate = totalAllocated > 0 ? ((Number(totalEngaged) || 0) / (Number(totalAllocated) || 1)) * 100 : 0;
+
+  // const pendingEngagements = engagements.filter(engagement => engagement.status === 'pending');
+  // const recentEngagements = engagements.slice(0, 5);
 
   const budgetLineBreakdown = budgetLines.map(budgetLine => {
     const subLines = subBudgetLines.filter(line => line.budgetLineId === budgetLine.id);
@@ -67,7 +89,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ grants, budgetLines, subBu
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between">
             <div>
@@ -83,13 +105,28 @@ export const Dashboard: React.FC<DashboardProps> = ({ grants, budgetLines, subBu
           </div>
         </div>
 
+         {/* Carte 1 : Budget Total */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Taux d'Exécution</p>
-              <p className="text-2xl font-bold text-green-600">{executionRate.toFixed(1)}%</p>
+              <p className="text-sm font-medium text-gray-600">Budget Total</p>
+              <p className="text-2xl font-bold text-blue-600">{formatAmount(totalGrantAmount)}</p>
+              <p className="text-sm text-gray-500 mt-1">{activeGrants.length} subventions</p>
+            </div>
+            <div className="p-3 bg-blue-100 rounded-full">
+              <Target className="w-6 h-6 text-blue-600" />
+            </div>
+          </div>
+        </div>
+
+        {/* Carte 2 : Taux d'Engagement */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Taux d'Engagement</p>
+              <p className="text-2xl font-bold text-green-600">{formatPercentage(engagementRate)}</p>
               <p className="text-sm text-gray-500 mt-1">
-                {formatAmount(totalEngaged)} engagés
+                {formatAmount(totalEngaged)} / {formatAmount(totalAllocated)}
               </p>
             </div>
             <div className="p-3 bg-green-100 rounded-full">
@@ -98,34 +135,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ grants, budgetLines, subBu
           </div>
         </div>
 
+        {/* Carte 3 : Taux d'Exécution (NOUVELLE) */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Taux d'Engagement</p>
-              <p className="text-2xl font-bold text-orange-600">{executionRate.toFixed(1)}%</p>
+              <p className="text-sm font-medium text-gray-600">Taux d'Exécution</p>
+              <p className="text-2xl font-bold text-orange-600">{formatPercentage(executionRate)}</p>
               <p className="text-sm text-gray-500 mt-1">
-                {formatAmount(totalEngaged)} engagés
+                {formatAmount(totalSpent)} / {formatAmount(totalEngaged)}
               </p>
             </div>
             <div className="p-3 bg-orange-100 rounded-full">
-              <Clock className="w-6 h-6 text-orange-600" />
+              <CheckCircle className="w-6 h-6 text-orange-600" />
             </div>
           </div>
         </div>
 
+        {/* Carte 4 : Montant Disponible */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Disponible</p>
-              <p className="text-2xl font-bold text-purple-600">
-                {formatAmount(totalAvailable)}
-              </p>
+              <p className="text-2xl font-bold text-purple-600">{formatAmount(totalAvailable)}</p>
               <p className="text-sm text-gray-500 mt-1">
-                {pendingEngagements.length} engagements en attente
+                {pendingEngagements.length} en attente
               </p>
             </div>
             <div className="p-3 bg-purple-100 rounded-full">
-              <CheckCircle className="w-6 h-6 text-purple-600" />
+              <Clock className="w-6 h-6 text-purple-600" />
             </div>
           </div>
         </div>

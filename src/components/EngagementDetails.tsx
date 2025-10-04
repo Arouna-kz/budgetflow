@@ -8,6 +8,7 @@ interface EngagementDetailsProps {
   engagements: Engagement[];
   onClose: () => void;
   onEditEngagement: (engagement: Engagement) => void;
+  currency?: string; // Nouvelle prop pour la devise
 }
 
 const EngagementDetails: React.FC<EngagementDetailsProps> = ({
@@ -15,11 +16,20 @@ const EngagementDetails: React.FC<EngagementDetailsProps> = ({
   budgetLine,
   engagements,
   onClose,
-  onEditEngagement
+  onEditEngagement,
+  currency = 'EUR' // Valeur par défaut
 }) => {
   const totalEngaged = engagements.reduce((sum, eng) => sum + eng.amount, 0);
   const approvedEngagements = engagements.filter(eng => eng.status === 'approved' || eng.status === 'paid');
   const pendingEngagements = engagements.filter(eng => eng.status === 'pending');
+
+  // Options de formatage dynamique basées sur la devise
+  const formatCurrency = (amount: number) => {
+    return amount.toLocaleString('fr-FR', { 
+      style: 'currency', 
+      currency: currency 
+    });
+  };
 
   const getApprovalStatus = (engagement: Engagement) => {
     const approvals = engagement.approvals;
@@ -57,6 +67,7 @@ const EngagementDetails: React.FC<EngagementDetailsProps> = ({
               <h2 className="text-2xl font-bold text-gray-900">Détail des Engagements</h2>
               <p className="text-gray-600">{subBudgetLine.code} - {subBudgetLine.name}</p>
               <p className="text-sm text-gray-500">{budgetLine.code} - {budgetLine.name}</p>
+              <p className="text-xs text-gray-400">Devise: {currency}</p>
             </div>
           </div>
           <button
@@ -73,19 +84,19 @@ const EngagementDetails: React.FC<EngagementDetailsProps> = ({
             <div>
               <p className="text-sm text-blue-700 font-medium">Budget Notifié</p>
               <p className="text-xl font-bold text-blue-900">
-                {subBudgetLine.notifiedAmount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                {formatCurrency(subBudgetLine.notifiedAmount)}
               </p>
             </div>
             <div>
               <p className="text-sm text-blue-700 font-medium">Total Engagé</p>
               <p className="text-xl font-bold text-orange-600">
-                {totalEngaged.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                {formatCurrency(totalEngaged)}
               </p>
             </div>
             <div>
               <p className="text-sm text-blue-700 font-medium">Solde Disponible</p>
               <p className={`text-xl font-bold ${subBudgetLine.availableAmount >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {subBudgetLine.availableAmount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                {formatCurrency(subBudgetLine.availableAmount)}
               </p>
             </div>
             <div>
@@ -159,7 +170,7 @@ const EngagementDetails: React.FC<EngagementDetailsProps> = ({
                           <div>
                             <p className="text-sm text-gray-600">Montant</p>
                             <p className="font-bold text-blue-600">
-                              {engagement.amount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                              {formatCurrency(engagement.amount)}
                             </p>
                           </div>
                           <div>
@@ -172,7 +183,7 @@ const EngagementDetails: React.FC<EngagementDetailsProps> = ({
 
                         <div className="mb-4">
                           <p className="text-sm text-gray-600">Description</p>
-                          <p className="text-gray-900">{engagement.description}</p>
+                            <p className="text-gray-900">{engagement.description}</p>
                         </div>
 
                         {engagement.quoteReference && (

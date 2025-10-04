@@ -1,9 +1,11 @@
-import React, { useState, useRef } from 'react';
-import { Plus, Edit, Trash2, FileText, Eye, Download, Printer, User, CheckCircle, Clock, AlertTriangle, X } from 'lucide-react';
-import { showValidationError, showWarning } from '../utils/alerts';
+import React, { useState, useRef, useEffect } from 'react';
+import { Plus, Edit, Trash2, FileText, Eye, Download, Printer, User, CheckCircle, Clock, AlertTriangle, X, Search, ChevronUp, ChevronDown, ChevronRight, ChevronLeft } from 'lucide-react';
+import { showValidationError, showWarning, showSuccess } from '../utils/alerts';
 import { Engagement, BudgetLine, SubBudgetLine, Grant, ENGAGEMENT_STATUS } from '../types';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import { usePermissions } from '../hooks/usePermissions';
+import { useAuth } from '../hooks/useAuth';
 
 interface EngagementManagerProps {
   engagements: Engagement[];
@@ -14,6 +16,14 @@ interface EngagementManagerProps {
   onUpdateEngagement: (id: string, updates: Partial<Engagement>) => void;
 }
 
+// Interface pour les signatures d'approbation
+interface ApprovalSignature {
+  name: string;
+  signature: boolean;
+  date?: string;
+  observation?: string;
+}
+
 const EngagementManager: React.FC<EngagementManagerProps> = ({
   engagements,
   budgetLines,
@@ -22,12 +32,29 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   onAddEngagement,
   onUpdateEngagement
 }) => {
+  // HOOKS D'AUTHENTIFICATION ET PERMISSIONS
+  const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
+  const { user: currentUser, userProfile, userRole } = useAuth();
+  
+  // ÉTATS DU COMPOSANT
   const [showForm, setShowForm] = useState(false);
   const [showSupplierHistory, setShowSupplierHistory] = useState(false);
   const [selectedSupplier, setSelectedSupplier] = useState<string>('');
   const [editingEngagement, setEditingEngagement] = useState<Engagement | null>(null);
   const [viewingEngagement, setViewingEngagement] = useState<Engagement | null>(null);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  
+  // États pour le tri et la pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(10);
+  const [sortField, setSortField] = useState<string>('engagementNumber');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [dateFilter, setDateFilter] = useState<string>('');
+  const [supplierFilter, setSupplierFilter] = useState<string>('');
+
+  // ÉTATS DU FORMULAIRE
   const [formData, setFormData] = useState({
     grantId: '',
     budgetLineId: '',
@@ -39,23 +66,228 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     quoteReference: '',
     invoiceNumber: '',
     date: new Date().toISOString().split('T')[0],
-    status: 'processing' as Engagement['status']
+    status: 'pending' as Engagement['status']
   });
 
   const [approvals, setApprovals] = useState({
-    supervisor1: { name: '', signature: false },
-    supervisor2: { name: '', signature: false },
-    finalApproval: { name: '', signature: false }
+    supervisor1: { name: '', signature: false, observation: '' },
+    supervisor2: { name: '', signature: false, observation: '' },
+    finalApproval: { name: '', signature: false, observation: '' }
   });
 
-  // Références pour les contenus PDF
+  const [showObservations, setShowObservations] = useState({
+    supervisor1: false,
+    supervisor2: false,
+    finalApproval: false
+  });
+
+  const closeEngagementDetails = () => {
+    setViewingEngagement(null);
+  };
+
+  // RÉFÉRENCES POUR PDF
   const mainContentRef = useRef<HTMLDivElement>(null);
   const signatureContentRef = useRef<HTMLDivElement>(null);
 
-  // Filtrer les engagements par subvention sélectionnée
-  const filteredEngagements = engagements;
+  // 🎯 FONCTIONS UTILITAIRES POUR LES RÔLES ET PERMISSIONS
+
+  // Récupère le nom complet de l'utilisateur de manière sécurisée
+  const getUserFullName = (): string => {
+    if (!userProfile) return '';
+    if (userProfile.firstName && userProfile.lastName) {
+      return `${userProfile.firstName} ${userProfile.lastName}`.trim();
+    }
+    return userProfile.email; // Fallback
+  };
+
+  // Récupère la profession de l'utilisateur
+  const getUserProfession = (): string => {
+    return userProfile?.profession || '';
+  };
+
+  // Vérifie si l'utilisateur peut voir la section signature
+  const canViewSignatureSection = (): boolean => {
+    const signatureProfessions = ['Coordinateur de la Subvention', 'Comptable', 'Coordonnateur National'];
+    return signatureProfessions.includes(getUserProfession());
+  };
+
+  // Vérifie si l'utilisateur peut modifier le statut
+  const canModifyStatus = (): boolean => {
+    return getUserProfession() === 'Coordonnateur National';
+  };
+
+  // Vérifie si l'utilisateur peut signer un engagement spécifique
+  const canSignEngagement = (engagement: Engagement | null, signatureType: string): boolean => {
+    // Vérification de null en premier
+    if (!engagement && signatureType === 'finalApproval') {
+      // Pour un nouvel engagement, le Coordonnateur National ne peut jamais signer en premier
+      return false;
+    }
+    
+    const currentApprovals = engagement ? engagement.approvals : approvals;
+    
+    if (!currentApprovals) {
+      return false;
+    }
+    
+    const userProfession = getUserProfession();
+    
+    // Vérification basée sur la profession et le type de signature
+    const professionCanSign = 
+      (signatureType === 'supervisor1' && userProfession === 'Coordinateur de la Subvention') ||
+      (signatureType === 'supervisor2' && userProfession === 'Comptable') ||
+      (signatureType === 'finalApproval' && userProfession === 'Coordonnateur National');
+
+    if (!professionCanSign) return false;
+
+    // Vérifie que la signature n'est pas déjà apposée
+    const existingApproval = currentApprovals[signatureType as keyof typeof currentApprovals];
+    if (existingApproval?.signature) return false;
+
+    // Pour le signataire final, vérifier que les deux premiers ont signé
+    if (signatureType === 'finalApproval') {
+      const hasSupervisor1Signed = currentApprovals.supervisor1?.signature;
+      const hasSupervisor2Signed = currentApprovals.supervisor2?.signature;
+      
+      // Si c'est un nouvel engagement (null), le Coordonnateur National ne peut pas signer
+      if (!engagement) return false;
+      
+      // Vérifier que les deux premiers ont signé pour l'engagement existant
+      if (!hasSupervisor1Signed || !hasSupervisor2Signed) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  // Récupère les engagements en attente de signature pour l'utilisateur actuel
+  const getPendingSignatures = (): Engagement[] => {
+    const userProfession = getUserProfession();
+    
+    return engagements.filter(engagement => {
+      if (userProfession === 'Coordinateur de la Subvention') {
+        return !engagement.approvals?.supervisor1?.signature;
+      } else if (userProfession === 'Comptable') {
+        return !engagement.approvals?.supervisor2?.signature;
+      } else if (userProfession === 'Coordonnateur National') {
+        const hasSupervisor1Signed = engagement.approvals?.supervisor1?.signature;
+        const hasSupervisor2Signed = engagement.approvals?.supervisor2?.signature;
+        const hasFinalSigned = engagement.approvals?.finalApproval?.signature;
+        return hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned;
+      }
+      return false;
+    });
+  };
+
+  // EFFET POUR PRÉ-REMPLIR LES NOMS DES SIGNATAIRES
+  useEffect(() => {
+    if (userProfile && canViewSignatureSection()) {
+      const userName = getUserFullName();
+      
+      setApprovals(prev => {
+        const newApprovals = { ...prev };
+        const userProfession = getUserProfession();
+        
+        if (userProfession === 'Coordinateur de la Subvention') {
+          newApprovals.supervisor1.name = userName;
+        } else if (userProfession === 'Comptable') {
+          newApprovals.supervisor2.name = userName;
+        } else if (userProfession === 'Coordonnateur National') {
+          newApprovals.finalApproval.name = userName;
+        }
+        
+        return newApprovals;
+      });
+    }
+  }, [userProfile]);
+
+  // PERMISSIONS
+  const canCreate = hasPermission('engagements', 'create');
+  const canEdit = hasPermission('engagements', 'edit');
+  const canDelete = hasPermission('engagements', 'delete');
+  const canView = hasPermission('engagements', 'view');
+  
+  // Récupération des données
+  const userProfession = getUserProfession();
+  const userFullName = getUserFullName();
+  const pendingSignatures = getPendingSignatures();
   const selectedGrant = grants.length > 0 ? grants[0] : null;
 
+  // 🚨 GESTIONNAIRES D'ÉVÉNEMENTS
+
+  // Fonction pour signer un engagement
+  const handleSignEngagement = (engagement: Engagement | null, signatureType: string) => {
+    if (!canSignEngagement(engagement, signatureType)) {
+      showWarning('Permission refusée', 'Vous ne pouvez pas signer cet engagement');
+      return;
+    }
+
+    if (engagement) {
+      // Cas d'un engagement existant (édition)
+      const updates: Partial<Engagement> = {
+        approvals: { ...engagement.approvals }
+      };
+
+      if (signatureType === 'supervisor1') {
+        updates.approvals = {
+          ...updates.approvals,
+          supervisor1: {
+            name: userFullName,
+            date: new Date().toISOString().split('T')[0],
+            signature: true,
+            observation: approvals.supervisor1.observation
+          }
+        };
+      } else if (signatureType === 'supervisor2') {
+        updates.approvals = {
+          ...updates.approvals,
+          supervisor2: {
+            name: userFullName,
+            date: new Date().toISOString().split('T')[0],
+            signature: true,
+            observation: approvals.supervisor2.observation
+          }
+        };
+      } else if (signatureType === 'finalApproval') {
+        updates.approvals = {
+          ...updates.approvals,
+          finalApproval: {
+            name: userFullName,
+            date: new Date().toISOString().split('T')[0],
+            signature: true,
+            observation: approvals.finalApproval.observation
+          }
+        };
+      }
+
+      onUpdateEngagement(engagement.id, updates);
+      showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès');
+    } else {
+      // Cas d'un nouvel engagement (création)
+      const updatedApproval = {
+        name: userFullName,
+        date: new Date().toISOString().split('T')[0],
+        signature: true,
+        observation: approvals[signatureType as keyof typeof approvals].observation
+      };
+
+      setApprovals(prev => ({
+        ...prev,
+        [signatureType]: updatedApproval
+      }));
+      
+      showSuccess('Signature préparée', 'Votre signature sera enregistrée avec le nouvel engagement');
+    }
+    
+    // Réinitialiser les observations après signature
+    setApprovals(prev => ({
+      ...prev,
+      [signatureType]: { ...prev[signatureType as keyof typeof approvals], observation: '' }
+    }));
+  };
+
+  // Réinitialisation du formulaire
   const resetForm = () => {
     setFormData({
       grantId: selectedGrant?.id || '',
@@ -71,30 +303,48 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       status: 'pending'
     });
     setApprovals({
-      supervisor1: { name: '', signature: false },
-      supervisor2: { name: '', signature: false },
-      finalApproval: { name: '', signature: false }
+      supervisor1: { name: '', signature: false, observation: '' },
+      supervisor2: { name: '', signature: false, observation: '' },
+      finalApproval: { name: '', signature: false, observation: '' }
+    });
+    setShowObservations({
+      supervisor1: false,
+      supervisor2: false,
+      finalApproval: false
     });
     setShowForm(false);
     setEditingEngagement(null);
   };
 
+  // Soumission du formulaire
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.grantId || !formData.budgetLineId || !formData.subBudgetLineId || !formData.amount || !formData.description || !formData.supplier) {
-      showValidationError('Champs obligatoires manquants', 'Veuillez remplir la subvention, la ligne budgétaire, la sous-ligne budgétaire, le montant, la description et le fournisseur');
+    if (!canCreate && !editingEngagement) {
+      showWarning('Permission refusée', 'Vous n\'avez pas la permission de créer des engagements');
       return;
     }
 
-    // Préparer les données d'approbation
+    if (!canEdit && editingEngagement) {
+      showWarning('Permission refusée', 'Vous n\'avez pas la permission de modifier des engagements');
+      return;
+    }
+    
+    // Validation des champs obligatoires
+    if (!formData.grantId || !formData.budgetLineId || !formData.subBudgetLineId || !formData.amount || !formData.description || !formData.supplier) {
+      showValidationError('Champs obligatoires manquants', 'Veuillez remplir tous les champs obligatoires');
+      return;
+    }
+
+    // Préparation des données d'approbation
     const approvalData: any = {};
     
     if (approvals.supervisor1.name) {
       approvalData.supervisor1 = {
         name: approvals.supervisor1.name,
         date: new Date().toISOString().split('T')[0],
-        signature: approvals.supervisor1.signature
+        signature: approvals.supervisor1.signature,
+        observation: approvals.supervisor1.observation
       };
     }
     
@@ -102,7 +352,8 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       approvalData.supervisor2 = {
         name: approvals.supervisor2.name,
         date: new Date().toISOString().split('T')[0],
-        signature: approvals.supervisor2.signature
+        signature: approvals.supervisor2.signature,
+        observation: approvals.supervisor2.observation
       };
     }
     
@@ -110,11 +361,13 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       approvalData.finalApproval = {
         name: approvals.finalApproval.name,
         date: new Date().toISOString().split('T')[0],
-        signature: approvals.finalApproval.signature
+        signature: approvals.finalApproval.signature,
+        observation: approvals.finalApproval.observation
       };
     }
 
     if (editingEngagement) {
+      // Modification d'un engagement existant
       onUpdateEngagement(editingEngagement.id, {
         grantId: formData.grantId,
         budgetLineId: formData.budgetLineId,
@@ -129,7 +382,9 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
         status: formData.status,
         approvals: approvalData
       });
+      showSuccess('Engagement modifié', 'L\'engagement a été modifié avec succès');
     } else {
+      // Création d'un nouvel engagement
       const now = new Date();
       const year = now.getFullYear();
       const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -150,12 +405,19 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
         status: formData.status,
         approvals: approvalData
       });
+      showSuccess('Engagement créé', 'L\'engagement a été créé avec succès');
     }
 
     resetForm();
   };
 
+  // Début de l'édition d'un engagement
   const startEdit = (engagement: Engagement) => {
+    if (!canEdit) {
+      showWarning('Permission refusée', 'Vous n\'avez pas la permission de modifier des engagements');
+      return;
+    }
+    
     setEditingEngagement(engagement);
     setFormData({
       grantId: engagement.grantId,
@@ -171,25 +433,31 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       status: engagement.status
     });
 
+    // Pré-remplir les signatures existantes
     if (engagement.approvals) {
       setApprovals({
-        supervisor1: engagement.approvals.supervisor1 || { name: '', signature: false },
-        supervisor2: engagement.approvals.supervisor2 || { name: '', signature: false },
-        finalApproval: engagement.approvals.finalApproval || { name: '', signature: false }
+        supervisor1: engagement.approvals.supervisor1 || { name: '', signature: false, observation: '' },
+        supervisor2: engagement.approvals.supervisor2 || { name: '', signature: false, observation: '' },
+        finalApproval: engagement.approvals.finalApproval || { name: '', signature: false, observation: '' }
       });
     }
 
     setShowForm(true);
   };
 
-  const viewEngagementDetails = (engagement: Engagement) => {
-    setViewingEngagement(engagement);
+  // Mise à jour du statut d'un engagement
+  const updateEngagementStatus = (engagementId: string, newStatus: Engagement['status']) => {
+    if (!canModifyStatus()) {
+      showWarning('Permission refusée', 'Seul le Coordonnateur National peut modifier le statut des engagements');
+      return;
+    }
+    onUpdateEngagement(engagementId, { status: newStatus });
+    showSuccess('Statut modifié', 'Le statut de l\'engagement a été modifié avec succès');
   };
 
-  const closeEngagementDetails = () => {
-    setViewingEngagement(null);
-  };
+  // 🔧 FONCTIONS UTILITAIRES
 
+  // Récupération des données liées
   const getBudgetLine = (budgetLineId: string) => {
     return budgetLines.find(line => line.id === budgetLineId);
   };
@@ -202,10 +470,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     return grants.find(grant => grant.id === grantId);
   };
 
-  const updateEngagementStatus = (engagementId: string, newStatus: Engagement['status']) => {
-    onUpdateEngagement(engagementId, { status: newStatus });
-  };
-
+  // Historique des fournisseurs
   const getSupplierHistory = (supplierName: string) => {
     return engagements.filter(eng => 
       eng.supplier && 
@@ -218,6 +483,67 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     setSelectedSupplier(supplierName);
     setShowSupplierHistory(true);
   };
+
+  // Gestion de la pagination et du tri
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  const getSortIcon = (field: string) => {
+    if (sortField !== field) return null;
+    return sortDirection === 'asc' ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />;
+  };
+
+  // Filtrage et tri des engagements
+  const searchedEngagements = engagements.filter(engagement => {
+    const searchLower = searchTerm.toLowerCase();
+    const matchesSearch = 
+      engagement.engagementNumber.toLowerCase().includes(searchLower) ||
+      engagement.description.toLowerCase().includes(searchLower) ||
+      (engagement.supplier && engagement.supplier.toLowerCase().includes(searchLower)) ||
+      engagement.quoteReference?.toLowerCase().includes(searchLower) ||
+      engagement.invoiceNumber?.toLowerCase().includes(searchLower);
+
+    const matchesStatus = statusFilter === 'all' || engagement.status === statusFilter;
+    const matchesDate = !dateFilter || engagement.date === dateFilter;
+    const matchesSupplier = !supplierFilter || 
+      (engagement.supplier && engagement.supplier.toLowerCase().includes(supplierFilter.toLowerCase()));
+
+    return matchesSearch && matchesStatus && matchesDate && matchesSupplier;
+  });
+
+  const sortedEngagements = [...searchedEngagements].sort((a, b) => {
+    let aValue: any = a[sortField as keyof Engagement];
+    let bValue: any = b[sortField as keyof Engagement];
+
+    if (sortField === 'amount') {
+      aValue = parseFloat(aValue);
+      bValue = parseFloat(bValue);
+    } else if (sortField === 'date') {
+      aValue = new Date(aValue).getTime();
+      bValue = new Date(bValue).getTime();
+    }
+
+    if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
+    if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // Pagination
+  const totalPages = Math.ceil(sortedEngagements.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const currentEngagements = sortedEngagements.slice(startIndex, endIndex);
+
+  // Navigation des pages
+  const goToPage = (page: number) => setCurrentPage(page);
+  const goToPreviousPage = () => currentPage > 1 && setCurrentPage(currentPage - 1);
+  const goToNextPage = () => currentPage < totalPages && setCurrentPage(currentPage + 1);
 
   const exportEngagementForm = async () => {
     const engagement = editingEngagement;
@@ -282,7 +608,6 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       setIsGeneratingPDF(false);
     }
   };
-
 
   const generateMainPDFContent = (engagement: Engagement) => {
     const budgetLine = getBudgetLine(engagement.budgetLineId);
@@ -397,6 +722,8 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   };
 
   const generateSignaturePDFContent = (engagement: Engagement) => {
+    const currentApprovals = engagement.approvals || approvals;
+
     return `
       <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding-top: 50px;">
         <div style="text-align: center; margin-bottom: 30px;">
@@ -413,25 +740,43 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
             <div class="signature-box">
               <h4 style="font-size: 14px; color: #555; margin-bottom: 15px;">Coordinateur de la subvention</h4>
               <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
-              <div class="form-field" style="min-height: 40px;">${approvals.supervisor1.name || '_________________________'}</div>
-              <p>Date: ${approvals.supervisor1.name ? new Date().toLocaleDateString('fr-FR') : '___/___/_____'}</p>
-              <p>Signature: ${approvals.supervisor1.signature ? '✅ Validée' : '◻ Non validée'}</p>
+              <div class="form-field" style="min-height: 40px;">${currentApprovals.supervisor1?.name || '_________________________'}</div>
+              <p>Date: ${(currentApprovals.supervisor1 as any)?.date || '___/___/_____'}</p>
+              <p>Signature: ${currentApprovals.supervisor1?.signature ? '✅ Validée' : '◻ Non validée'}</p>
+              ${currentApprovals.supervisor1?.observation ? `
+              <div style="margin-top: 10px;">
+                <strong>Observation:</strong>
+                <p style="font-size: 12px; color: #666;">${currentApprovals.supervisor1.observation}</p>
+              </div>
+              ` : ''}
             </div>
             
             <div class="signature-box">
               <h4 style="font-size: 14px; color: #555; margin-bottom: 15px;">Comptable</h4>
               <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
-              <div class="form-field" style="min-height: 40px;">${approvals.supervisor2.name || '_________________________'}</div>
-              <p>Date: ${approvals.supervisor2.name ? new Date().toLocaleDateString('fr-FR') : '___/___/_____'}</p>
-              <p>Signature: ${approvals.supervisor2.signature ? '✅ Validée' : '◻ Non validée'}</p>
+              <div class="form-field" style="min-height: 40px;">${currentApprovals.supervisor2?.name || '_________________________'}</div>
+              <p>Date: ${(currentApprovals.supervisor2 as any)?.date || '___/___/_____'}</p>
+              <p>Signature: ${currentApprovals.supervisor2?.signature ? '✅ Validée' : '◻ Non validée'}</p>
+              ${currentApprovals.supervisor2?.observation ? `
+              <div style="margin-top: 10px;">
+                <strong>Observation:</strong>
+                <p style="font-size: 12px; color: #666;">${currentApprovals.supervisor2.observation}</p>
+              </div>
+              ` : ''}
             </div>
             
             <div class="signature-box">
               <h4 style="font-size: 14px; color: #555; margin-bottom: 15px;">Coordonnateur national</h4>
               <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
-              <div class="form-field" style="min-height: 40px;">${approvals.finalApproval.name || '_________________________'}</div>
-              <p>Date: ${approvals.finalApproval.name ? new Date().toLocaleDateString('fr-FR') : '___/___/_____'}</p>
-              <p>Signature: ${approvals.finalApproval.signature ? '✅ Validée' : '◻ Non validée'}</p>
+              <div class="form-field" style="min-height: 40px;">${currentApprovals.finalApproval?.name || '_________________________'}</div>
+              <p>Date: ${(currentApprovals.finalApproval as any)?.date || '___/___/_____'}</p>
+              <p>Signature: ${currentApprovals.finalApproval?.signature ? '✅ Validée' : '◻ Non validée'}</p>
+              ${currentApprovals.finalApproval?.observation ? `
+              <div style="margin-top: 10px;">
+                <strong>Observation:</strong>
+                <p style="font-size: 12px; color: #666;">${currentApprovals.finalApproval.observation}</p>
+              </div>
+              ` : ''}
             </div>
           </div>
         </div>
@@ -467,37 +812,294 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     return text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
   };
 
+  // Fonction pour basculer l'affichage des observations
+  const toggleObservation = (signatureType: string) => {
+    setShowObservations(prev => ({
+      ...prev,
+      [signatureType]: !prev[signatureType as keyof typeof showObservations]
+    }));
+  };
 
+  // Fonction pour obtenir l'icône de signature
+  const getSignatureIcon = (engagement: Engagement, signatureType: string) => {
+    const approval = engagement.approvals?.[signatureType as keyof typeof engagement.approvals];
+    if (approval?.signature) {
+      return <CheckCircle className="w-4 h-4 text-green-600" />;
+    } else {
+      return <Clock className="w-4 h-4 text-gray-400" />;
+    }
+  };
+
+  // Rendu des champs manquants du formulaire
+  const renderFormFields = () => (
+    <>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Sous-ligne budgétaire *
+          </label>
+          <select
+            value={formData.subBudgetLineId}
+            onChange={(e) => setFormData(prev => ({ ...prev, subBudgetLineId: e.target.value }))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            required
+            disabled={!formData.budgetLineId}
+          >
+            <option value="">Sélectionner une sous-ligne</option>
+            {subBudgetLines.filter(line => line.budgetLineId === formData.budgetLineId).map(line => (
+              <option key={line.id} value={line.id}>
+                {line.code} - {line.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Date *
+          </label>
+          <input
+            type="date"
+            value={formData.date}
+            onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            required
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Montant ({getCurrencySymbol(selectedGrant?.currency || 'EUR')}) *
+          </label>
+          <div className="relative">
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={formData.amount}
+              onChange={(e) => setFormData(prev => ({ ...prev, amount: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8"
+              placeholder="0.00"
+              required
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Fournisseur *
+          </label>
+          <div className="flex items-center space-x-2">
+            <input
+              type="text"
+              value={formData.supplier}
+              onChange={(e) => setFormData(prev => ({ ...prev, supplier: e.target.value }))}
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="Nom du fournisseur"
+              required
+            />
+            {formData.supplier && (
+              <button
+                type="button"
+                onClick={() => showSupplierHistoryModal(formData.supplier)}
+                className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                title="Voir l'historique du fournisseur"
+              >
+                <Eye className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          Description *
+        </label>
+        <textarea
+          value={formData.description}
+          onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          rows={3}
+          placeholder="Description de l'engagement..."
+          required
+        />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Référence du devis
+          </label>
+          <input
+            type="text"
+            value={formData.quoteReference}
+            onChange={(e) => setFormData(prev => ({ ...prev, quoteReference: e.target.value }))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            placeholder="Ex: DEV-2024-001"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            N° Facture
+          </label>
+          <input
+            type="text"
+            value={formData.invoiceNumber}
+            onChange={(e) => setFormData(prev => ({ ...prev, invoiceNumber: e.target.value }))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            placeholder="Ex: FAC-2024-001"
+          />
+        </div>
+      </div>
+      
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          Statut
+        </label>
+        <select
+          value={formData.status}
+          onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Engagement['status'] }))}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        >
+          <option value="pending">En attente</option>
+          {userProfession === "Coordonnateur National" && (
+            <>
+              <option value="approved">Approuvé</option>
+              <option value="rejected">Rejeté</option>
+            </>
+          )}
+        </select>
+      </div>
+    </>
+  );
+
+  // 🚨 VÉRIFICATIONS DE CHARGEMENT ET PERMISSIONS
+  if (permissionsLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement des permissions...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasModuleAccess('engagements')) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-700 mb-2">Accès non autorisé</h2>
+          <p className="text-gray-500">Vous n'avez pas les permissions nécessaires pour accéder à ce module.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 🎯 RENDU PRINCIPAL
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      {/* Header avec notifications de signatures en attente */}
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Gestion des Engagements</h2>
           <p className="text-gray-600 mt-1">Suivi et validation des engagements par ligne budgétaire</p>
         </div>
-        <div className="flex items-center space-x-4">
-          <button
-            onClick={() => {
-              if (!selectedGrant) {
-                showWarning('Aucune subvention', 'Aucune subvention disponible pour ajouter un engagement');
-                return;
-              }
-              setFormData(prev => ({ ...prev, grantId: selectedGrant.id }));
-              setShowForm(true);
-            }}
-            className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Nouvel Engagement</span>
-          </button>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          {/* Notification des signatures en attente */}
+          {pendingSignatures.length > 0 && (
+            <div className="bg-orange-50 border border-orange-200 rounded-lg px-4 py-2">
+              <div className="flex items-center space-x-2">
+                <AlertTriangle className="w-4 h-4 text-orange-600" />
+                <span className="text-sm font-medium text-orange-800">
+                  {pendingSignatures.length} signature(s) en attente
+                </span>
+              </div>
+            </div>
+          )}
+          
+          {canCreate && (
+            <button
+              onClick={() => {
+                if (!selectedGrant) {
+                  showWarning('Aucune subvention', 'Aucune subvention disponible pour ajouter un engagement');
+                  return;
+                }
+                setFormData(prev => ({ ...prev, grantId: selectedGrant.id }));
+                setShowForm(true);
+              }}
+              className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center justify-center space-x-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Nouvel Engagement</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Grant Information */}
+      {/* Barre de recherche et filtres */}
+      <div className="bg-white rounded-2xl p-4 border border-gray-100">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+          <div className="relative">
+            <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Rechercher..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+          
+          <div>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              <option value="all">Tous les statuts</option>
+              <option value="pending">En attente</option>
+              <option value="approved">Approuvé</option>
+              <option value="rejected">Rejeté</option>
+            </select>
+          </div>
+          
+          <div>
+            <input
+              type="date"
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+          
+          <div>
+            <input
+              type="text"
+              placeholder="Filtrer par fournisseur"
+              value={supplierFilter}
+              onChange={(e) => setSupplierFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+        </div>
+        
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="flex items-center space-x-4 text-sm text-gray-600">
+            <span>{sortedEngagements.length} engagement(s) trouvé(s)</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Informations sur la subvention */}
       {selectedGrant && (
         <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-2xl p-6 border border-blue-200">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4 gap-4">
             <div>
               <h3 className="text-lg font-semibold text-gray-900">{selectedGrant.name}</h3>
               <p className="text-gray-600">{selectedGrant.reference} - {selectedGrant.grantingOrganization}</p>
@@ -509,7 +1111,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
               </p>
             </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="text-center">
               <p className="text-sm text-gray-600">Montant Total</p>
               <p className="text-xl font-bold text-blue-600">
@@ -518,27 +1120,26 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
             </div>
             <div className="text-center">
               <p className="text-sm text-gray-600">Engagements</p>
-              <p className="text-xl font-bold text-green-600">{filteredEngagements.length}</p>
+              <p className="text-xl font-bold text-green-600">{engagements.length}</p>
             </div>
             <div className="text-center">
               <p className="text-sm text-gray-600">Montant Engagé</p>
               <p className="text-xl font-bold text-orange-600">
-                {formatCurrency(filteredEngagements.reduce((sum, eng) => sum + eng.amount, 0), selectedGrant.currency)}
+                {formatCurrency(engagements.reduce((sum, eng) => sum + eng.amount, 0), selectedGrant.currency)}
               </p>
             </div>
             <div className="text-center">
               <p className="text-sm text-gray-600">En Attente</p>
-              <p className="text-xl font-bold text-yellow-600">{filteredEngagements.filter(eng => eng.status === 'pending').length}</p>
+              <p className="text-xl font-bold text-yellow-600">{engagements.filter(eng => eng.status === 'pending').length}</p>
             </div>
           </div>
         </div>
       )}
 
-      {/* Form Modal */}
+      {/* Modal du formulaire */}
       {showForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-4xl w-full p-8 max-h-[90vh] overflow-y-auto">
-            {/* Header */}
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center space-x-3">
                 <div className="p-2 bg-blue-100 rounded-lg">
@@ -552,15 +1153,13 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
               </div>
               <div className="flex items-center space-x-2">
                 {editingEngagement && (
-                  <>
-                    <button
-                      onClick={exportEngagementForm}
-                      className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                      title="Exporter la fiche"
-                    >
-                      <Download className="w-5 h-5" />
-                    </button>
-                  </>
+                  <button
+                    onClick={exportEngagementForm}
+                    className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                    title="Exporter la fiche"
+                  >
+                    <Download className="w-5 h-5" />
+                  </button>
                 )}
                 <button
                   onClick={resetForm}
@@ -572,6 +1171,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
             </div>
             
             <form onSubmit={handleSubmit} className="space-y-6">
+              {/* Champs du formulaire */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -591,11 +1191,6 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                       </option>
                     ))}
                   </select>
-                  {!editingEngagement && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      Subvention sélectionnée automatiquement
-                    </p>
-                  )}
                 </div>
 
                 <div>
@@ -619,237 +1214,224 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Sous-ligne budgétaire *
-                  </label>
-                  <select
-                    value={formData.subBudgetLineId}
-                    onChange={(e) => setFormData(prev => ({ ...prev, subBudgetLineId: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                    disabled={!formData.budgetLineId}
-                  >
-                    <option value="">Sélectionner une sous-ligne</option>
-                    {subBudgetLines.filter(line => line.budgetLineId === formData.budgetLineId).map(line => (
-                      <option key={line.id} value={line.id}>
-                        {line.code} - {line.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              {renderFormFields()}
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Date *
-                  </label>
-                  <input
-                    type="date"
-                    value={formData.date}
-                    onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Montant *
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={formData.amount}
-                      onChange={(e) => setFormData(prev => ({ ...prev, amount: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8"
-                      placeholder="0.00"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Fournisseur *
-                  </label>
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="text"
-                      value={formData.supplier}
-                      onChange={(e) => setFormData(prev => ({ ...prev, supplier: e.target.value }))}
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="Nom du fournisseur"
-                      required
-                    />
-                    {formData.supplier && (
-                      <button
-                        type="button"
-                        onClick={() => showSupplierHistoryModal(formData.supplier)}
-                        className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                        title="Voir l'historique du fournisseur"
-                      >
-                        <Eye className="w-5 h-5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Description *
-                </label>
-                <textarea
-                  value={formData.description}
-                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  rows={3}
-                  placeholder="Description de l'engagement..."
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Référence du devis
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.quoteReference}
-                    onChange={(e) => setFormData(prev => ({ ...prev, quoteReference: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Ex: DEV-2024-001"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    N° Facture
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.invoiceNumber}
-                    onChange={(e) => setFormData(prev => ({ ...prev, invoiceNumber: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Ex: FAC-2024-001"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Statut
-                </label>
-                <select
-                  value={formData.status}
-                  onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Engagement['status'] }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value="processing">En traitement</option>
-                  <option value="approved">Approuvé</option>
-                  <option value="rejected">Rejeté</option>
-                </select>
-              </div>
-
-              {/* Signatures Section - TOUJOURS VISIBLE MAIS NON OBLIGATOIRE */}
-              <div className="bg-yellow-50 rounded-xl p-6 border border-yellow-200">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                  <User className="w-5 h-5 mr-2" />
-                  Signatures d'Approbation (Optionnel)
-                </h3>
-                <p className="text-sm text-yellow-700 mb-4">
-                  Vous pouvez ajouter les signatures maintenant ou plus tard lors de la modification.
-                </p>
-                
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {/* Responsable 1 */}
-                  <div className="space-y-3">
-                    <h4 className="font-medium text-gray-800">Coordinateur de la Subvention</h4>
-                    <input
-                      type="text"
-                      placeholder="Nom du responsable"
-                      value={approvals.supervisor1.name}
-                      onChange={(e) => setApprovals(prev => ({
-                        ...prev,
-                        supervisor1: { ...prev.supervisor1, name: e.target.value }
-                      }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                    <label className="flex items-center space-x-2">
+              {/* Section Signatures - Affichée seulement pour les rôles autorisés */}
+              {canViewSignatureSection() && (
+                <div className="bg-yellow-50 rounded-xl p-6 border border-yellow-200">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <User className="w-5 h-5 mr-2" />
+                    Signatures d'Approbation
+                  </h3>
+                  
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* Coordinateur de la Subvention */}
+                    <div className="bg-white rounded-lg p-4 border border-gray-200">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-medium text-gray-800">Coordinateur de la Subvention</h4>
+                        {/* Dans chaque section de signature */}
+                        {canSignEngagement(editingEngagement, 'supervisor1') && (
+                          <button
+                            type="button"
+                            onClick={() => handleSignEngagement(editingEngagement, 'supervisor1')}
+                            className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
+                          >
+                            Signer
+                          </button>
+                        )}
+                      </div>
                       <input
-                        type="checkbox"
-                        checked={approvals.supervisor1.signature}
+                        type="text"
+                        value={userProfession === 'Coordinateur de la Subvention' && !approvals.supervisor1.name ? userFullName : approvals.supervisor1.name}
                         onChange={(e) => setApprovals(prev => ({
                           ...prev,
-                          supervisor1: { ...prev.supervisor1, signature: e.target.checked }
+                          supervisor1: { ...prev.supervisor1, name: e.target.value }
                         }))}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
+                        disabled
                       />
-                      <span className="text-sm text-gray-700">Signature validée</span>
-                    </label>
-                  </div>
+                      
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={approvals.supervisor1.signature}
+                            onChange={(e) => setApprovals(prev => ({
+                              ...prev,
+                              supervisor1: { ...prev.supervisor1, signature: e.target.checked }
+                            }))}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            disabled={userProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
+                          />
+                          <span className="text-sm text-gray-700">Signature validée</span>
+                        </label>
+                        
+                        <button
+                          type="button"
+                          onClick={() => toggleObservation('supervisor1')}
+                          className="text-blue-600 text-sm hover:text-blue-800 flex items-center space-x-1"
+                        >
+                          <span>Observation</span>
+                          {showObservations.supervisor1 ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      
+                      {showObservations.supervisor1 && (
+                        <div className="mt-3">
+                          <textarea
+                            value={approvals.supervisor1.observation}
+                            onChange={(e) => setApprovals(prev => ({
+                              ...prev,
+                              supervisor1: { ...prev.supervisor1, observation: e.target.value }
+                            }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            rows={3}
+                            placeholder="Saisissez votre observation..."
+                            disabled={userProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
+                          />
+                        </div>
+                      )}
+                    </div>
 
-                  {/* Responsable 2 */}
-                  <div className="space-y-3">
-                    <h4 className="font-medium text-gray-800">Comptable</h4>
-                    <input
-                      type="text"
-                      placeholder="Nom du responsable"
-                      value={approvals.supervisor2.name}
-                      onChange={(e) => setApprovals(prev => ({
-                        ...prev,
-                        supervisor2: { ...prev.supervisor2, name: e.target.value }
-                      }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                    <label className="flex items-center space-x-2">
+                    {/* Comptable */}
+                    <div className="bg-white rounded-lg p-4 border border-gray-200">
+                      <div className="bg-white rounded-lg p-4 border border-gray-200">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="font-medium text-gray-800">Comptable</h4>
+                          {canSignEngagement(editingEngagement, 'supervisor2') && (
+                            <button
+                              type="button"
+                              onClick={() => handleSignEngagement(editingEngagement, 'supervisor2')}
+                              className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
+                            >
+                              Signer
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          value={userProfession === 'Comptable' && !approvals.supervisor2.name ? userFullName : approvals.supervisor2.name}
+                          onChange={(e) => setApprovals(prev => ({
+                            ...prev,
+                            supervisor2: { ...prev.supervisor2, name: e.target.value }
+                          }))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
+                          disabled
+                        />
+                        
+                        <div className="flex items-center justify-between">
+                          <label className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              checked={approvals.supervisor2.signature}
+                              onChange={(e) => setApprovals(prev => ({
+                                ...prev,
+                                supervisor2: { ...prev.supervisor2, signature: e.target.checked }
+                              }))}
+                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                              disabled={userProfession !== 'Comptable' || !!approvals.supervisor2.name}
+                            />
+                            <span className="text-sm text-gray-700">Signature validée</span>
+                          </label>
+                          
+                          <button
+                            type="button"
+                            onClick={() => toggleObservation('supervisor2')}
+                            className="text-blue-600 text-sm hover:text-blue-800 flex items-center space-x-1"
+                          >
+                            <span>Observation</span>
+                            {showObservations.supervisor2 ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          </button>
+                        </div>
+                        
+                        {showObservations.supervisor2 && (
+                          <div className="mt-3">
+                            <textarea
+                              value={approvals.supervisor2.observation}
+                              onChange={(e) => setApprovals(prev => ({
+                                ...prev,
+                                supervisor2: { ...prev.supervisor2, observation: e.target.value }
+                              }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              rows={3}
+                              placeholder="Saisissez votre observation..."
+                              disabled={userProfession !== 'Comptable' || !!approvals.supervisor2.name}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Coordonnateur National */}
+                    <div className="bg-white rounded-lg p-4 border border-gray-200">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-medium text-gray-800">Coordonnateur National</h4>
+                        {canSignEngagement(editingEngagement, 'finalApproval') && (
+                          <button
+                            type="button"
+                            onClick={() => handleSignEngagement(editingEngagement, 'finalApproval')}
+                            className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
+                          >
+                            Signer
+                          </button>
+                        )}
+                      </div>
                       <input
-                        type="checkbox"
-                        checked={approvals.supervisor2.signature}
+                        type="text"
+                        value={userProfession === 'Coordonnateur National' && !approvals.finalApproval.name ? userFullName : approvals.finalApproval.name}
                         onChange={(e) => setApprovals(prev => ({
                           ...prev,
-                          supervisor2: { ...prev.supervisor2, signature: e.target.checked }
+                          finalApproval: { ...prev.finalApproval, name: e.target.value }
                         }))}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
+                        disabled
                       />
-                      <span className="text-sm text-gray-700">Signature validée</span>
-                    </label>
-                  </div>
+                      
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={approvals.finalApproval.signature}
+                            onChange={(e) => setApprovals(prev => ({
+                              ...prev,
+                              finalApproval: { ...prev.finalApproval, signature: e.target.checked }
+                            }))}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            disabled={userProfession !== 'Coordonnateur National' || !!approvals.finalApproval.name}
+                          />
+                          <span className="text-sm text-gray-700">Signature validée</span>
+                        </label>
+                        
+                        <button
+                          type="button"
+                          onClick={() => toggleObservation('finalApproval')}
+                          className="text-blue-600 text-sm hover:text-blue-800 flex items-center space-x-1"
+                        >
+                          <span>Observation</span>
+                          {showObservations.finalApproval ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      
+                      {showObservations.finalApproval && (
+                        <div className="mt-3">
+                          <textarea
+                            value={approvals.finalApproval.observation}
+                            onChange={(e) => setApprovals(prev => ({
+                              ...prev,
+                              finalApproval: { ...prev.finalApproval, observation: e.target.value }
+                            }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            rows={3}
+                            placeholder="Saisissez votre observation..."
+                            disabled={userProfession !== 'Coordonnateur National' || !!approvals.finalApproval.name}
 
-                  {/* Validation Finale */}
-                  <div className="space-y-3">
-                    <h4 className="font-medium text-gray-800">Coordonnateur National</h4>
-                    <input
-                      type="text"
-                      placeholder="Responsable entreprise"
-                      value={approvals.finalApproval.name}
-                      onChange={(e) => setApprovals(prev => ({
-                        ...prev,
-                        finalApproval: { ...prev.finalApproval, name: e.target.value }
-                      }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                    <label className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        checked={approvals.finalApproval.signature}
-                        onChange={(e) => setApprovals(prev => ({
-                          ...prev,
-                          finalApproval: { ...prev.finalApproval, signature: e.target.checked }
-                        }))}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span className="text-sm text-gray-700">Signature validée</span>
-                    </label>
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               <div className="flex space-x-3 pt-4">
                 <button
@@ -870,6 +1452,231 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
           </div>
         </div>
       )}
+
+      {/* Tableau des engagements */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        {currentEngagements.length === 0 ? (
+          <div className="text-center py-12">
+            <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
+              <FileText className="w-8 h-8 text-gray-400" />
+            </div>
+            <h3 className="text-lg font-medium text-gray-900 mb-2">Aucun engagement</h3>
+            <p className="text-gray-500 mb-4">Commencez par ajouter votre premier engagement</p>
+            {canCreate && (
+              <button
+                onClick={() => setShowForm(true)}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors"
+              >
+                Nouvel engagement
+              </button>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th 
+                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleSort('engagementNumber')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Engagement</span>
+                        {getSortIcon('engagementNumber')}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleSort('date')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Date</span>
+                        {getSortIcon('date')}
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Ligne budgétaire
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Sous-ligne
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Fournisseur
+                    </th>
+                    <th 
+                      className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleSort('amount')}
+                    >
+                      <div className="flex items-center justify-end space-x-1">
+                        <span>Montant</span>
+                        {getSortIcon('amount')}
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Signatures
+                    </th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Statut
+                    </th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {currentEngagements.map(engagement => {
+                    const budgetLine = getBudgetLine(engagement.budgetLineId);
+                    const subBudgetLine = getSubBudgetLine(engagement.subBudgetLineId);
+                    const grant = getGrant(engagement.grantId);
+                    
+                    return (
+                      <tr key={engagement.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-4">
+                          <div>
+                            <div className="text-sm font-medium text-gray-900">{engagement.engagementNumber}</div>
+                            <div className="text-sm text-gray-500 truncate max-w-[150px]">
+                              {truncateText(engagement.description, 30)}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-sm text-gray-900">
+                          {new Date(engagement.date).toLocaleDateString('fr-FR')}
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="text-sm text-gray-900" title={budgetLine?.name || 'Ligne supprimée'}>
+                            {truncateText(budgetLine?.name || 'Ligne supprimée', 20)}
+                          </div>
+                          <div className="text-sm text-gray-500">{budgetLine?.code}</div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="text-sm text-gray-900" title={subBudgetLine?.name || 'Sous-ligne supprimée'}>
+                            {truncateText(subBudgetLine?.name || 'Sous-ligne supprimée', 20)}
+                          </div>
+                          <div className="text-sm text-gray-500">{subBudgetLine?.code}</div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <button
+                            onClick={() => engagement.supplier && showSupplierHistoryModal(engagement.supplier)}
+                            className="text-sm text-blue-600 hover:text-blue-800 hover:underline cursor-pointer text-left"
+                            title={engagement.supplier || 'Non spécifié'}
+                          >
+                            {truncateText(engagement.supplier || 'Non spécifié', 20)}
+                          </button>
+                        </td>
+                        <td className="px-4 py-4 text-right text-sm font-medium text-gray-900">
+                          {grant ? formatCurrency(engagement.amount, grant.currency) : engagement.amount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          <div className="flex items-center justify-center space-x-2">
+                            {getSignatureIcon(engagement, 'supervisor1')}
+                            {getSignatureIcon(engagement, 'supervisor2')}
+                            {getSignatureIcon(engagement, 'finalApproval')}
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          {canModifyStatus() ? (
+                            <select
+                              value={engagement.status}
+                              onChange={(e) => updateEngagementStatus(engagement.id, e.target.value as Engagement['status'])}
+                              className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${ENGAGEMENT_STATUS[engagement.status].color}`}
+                            >
+                              <option value="pending">En attente</option>
+                              <option value="approved">Approuvé</option>
+                              <option value="rejected">Rejeté</option>
+                            </select>
+                          ) : (
+                            <span className={`text-xs font-medium rounded-full px-2 py-1 ${ENGAGEMENT_STATUS[engagement.status].color}`}>
+                              {ENGAGEMENT_STATUS[engagement.status].label}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          <div className="flex items-center justify-center space-x-1">
+                            {canView && (
+                              <button
+                                onClick={() => setViewingEngagement(engagement)}
+                                className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                                title="Voir les détails"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+                            )}
+                            {canEdit && (
+                              <button
+                                onClick={() => startEdit(engagement)}
+                                className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Modifier"
+                              >
+                                <Edit className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-4 py-4 border-t border-gray-200 gap-4">
+                <div className="text-sm text-gray-700">
+                  Affichage de {startIndex + 1} à {Math.min(endIndex, sortedEngagements.length)} sur {sortedEngagements.length} engagements
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={goToPreviousPage}
+                    disabled={currentPage === 1}
+                    className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed rounded border border-gray-300 flex items-center"
+                  >
+                    <ChevronLeft className="w-4 h-4 mr-1" />
+                    Précédent
+                  </button>
+                  
+                  {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                    let pageNum;
+                    if (totalPages <= 5) {
+                      pageNum = i + 1;
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => goToPage(pageNum)}
+                        className={`px-3 py-1 text-sm rounded min-w-[40px] ${
+                          currentPage === pageNum
+                            ? 'bg-blue-600 text-white'
+                            : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100 border border-gray-300'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                  
+                  <button
+                    onClick={goToNextPage}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed rounded border border-gray-300 flex items-center"
+                  >
+                    Suivant
+                    <ChevronRight className="w-4 h-4 ml-1" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
 
       {/* Supplier History Modal */}
       {showSupplierHistory && (
@@ -906,13 +1713,14 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                     <div className="bg-green-50 rounded-lg p-4">
                       <p className="text-sm text-green-600 font-medium">Montant Total</p>
                       <p className="text-2xl font-bold text-green-900">
-                        {totalAmount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                        {totalAmount} {getCurrencySymbol(selectedGrant?.currency || 'EUR')}
+
                       </p>
                     </div>
                     <div className="bg-purple-50 rounded-lg p-4">
                       <p className="text-sm text-purple-600 font-medium">Montant Approuvé</p>
                       <p className="text-2xl font-bold text-purple-900">
-                        {approvedAmount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                        {approvedAmount} {getCurrencySymbol(selectedGrant?.currency || 'EUR')}
                       </p>
                     </div>
                   </div>
@@ -945,7 +1753,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                               </div>
                               <div className="text-right">
                                 <p className="font-bold text-gray-900">
-                                  {engagement.amount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                                  {engagement.amount} {getCurrencySymbol(selectedGrant?.currency || 'EUR')}
                                 </p>
                               </div>
                             </div>
@@ -1086,6 +1894,17 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                         <p className="text-xs text-gray-600">
                           Signé: {viewingEngagement.approvals.supervisor1.signature ? 'Oui' : 'Non'}
                         </p>
+                        {viewingEngagement.approvals.supervisor1.date && (
+                          <p className="text-xs text-gray-600">
+                            Date: {new Date(viewingEngagement.approvals.supervisor1.date).toLocaleDateString('fr-FR')}
+                          </p>
+                        )}
+                        {viewingEngagement.approvals.supervisor1.observation && (
+                          <div className="mt-2">
+                            <p className="text-xs font-medium text-gray-600">Observation:</p>
+                            <p className="text-xs text-gray-500">{viewingEngagement.approvals.supervisor1.observation}</p>
+                          </div>
+                        )}
                       </div>
                     )}
                     {viewingEngagement.approvals.supervisor2 && (
@@ -1095,6 +1914,17 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                         <p className="text-xs text-gray-600">
                           Signé: {viewingEngagement.approvals.supervisor2.signature ? 'Oui' : 'Non'}
                         </p>
+                        {viewingEngagement.approvals.supervisor2.date && (
+                          <p className="text-xs text-gray-600">
+                            Date: {new Date(viewingEngagement.approvals.supervisor2.date).toLocaleDateString('fr-FR')}
+                          </p>
+                        )}
+                        {viewingEngagement.approvals.supervisor2.observation && (
+                          <div className="mt-2">
+                            <p className="text-xs font-medium text-gray-600">Observation:</p>
+                            <p className="text-xs text-gray-500">{viewingEngagement.approvals.supervisor2.observation}</p>
+                          </div>
+                        )}
                       </div>
                     )}
                     {viewingEngagement.approvals.finalApproval && (
@@ -1104,6 +1934,17 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                         <p className="text-xs text-gray-600">
                           Signé: {viewingEngagement.approvals.finalApproval.signature ? 'Oui' : 'Non'}
                         </p>
+                        {viewingEngagement.approvals.finalApproval.date && (
+                          <p className="text-xs text-gray-600">
+                            Date: {new Date(viewingEngagement.approvals.finalApproval.date).toLocaleDateString('fr-FR')}
+                          </p>
+                        )}
+                        {viewingEngagement.approvals.finalApproval.observation && (
+                          <div className="mt-2">
+                            <p className="text-xs font-medium text-gray-600">Observation:</p>
+                            <p className="text-xs text-gray-500">{viewingEngagement.approvals.finalApproval.observation}</p>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1113,128 +1954,6 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
           </div>
         </div>
       )}
-
-      {/* Engagements List */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        {engagements.length === 0 ? (
-          <div className="text-center py-12">
-            <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
-              <FileText className="w-8 h-8 text-gray-400" />
-            </div>
-            <h3 className="text-lg font-medium text-gray-900 mb-2">Aucun engagement</h3>
-            <p className="text-gray-500 mb-4">Commencez par ajouter votre premier engagement</p>
-            <button
-              onClick={() => setShowForm(true)}
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors"
-            >
-              Nouvel engagement
-            </button>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Engagement
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Ligne budgétaire
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Sous-ligne budgétaire
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Fournisseur
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Montant
-                  </th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Statut
-                  </th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredEngagements.map(engagement => {
-                  const budgetLine = getBudgetLine(engagement.budgetLineId);
-                  const subBudgetLine = getSubBudgetLine(engagement.subBudgetLineId);
-                  const grant = getGrant(engagement.grantId);
-                  
-                  return (
-                    <tr key={engagement.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4">
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">{engagement.engagementNumber}</div>
-                          <div className="text-sm text-gray-500">
-                            {new Date(engagement.date).toLocaleDateString('fr-FR')}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm text-gray-900" title={budgetLine?.name || 'Ligne supprimée'}>
-                          {truncateText(budgetLine?.name || 'Ligne supprimée', 25)}
-                        </div>
-                        <div className="text-sm text-gray-500">{budgetLine?.code}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm text-gray-900" title={subBudgetLine?.name || 'Sous-ligne supprimée'}>
-                          {truncateText(subBudgetLine?.name || 'Sous-ligne supprimée', 25)}
-                        </div>
-                        <div className="text-sm text-gray-500">{subBudgetLine?.code}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <button
-                          onClick={() => engagement.supplier && showSupplierHistoryModal(engagement.supplier)}
-                          className="text-sm text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
-                          title={engagement.supplier || 'Non spécifié'}
-                        >
-                          {truncateText(engagement.supplier || 'Non spécifié', 20)}
-                        </button>
-                      </td>
-                      <td className="px-6 py-4 text-right text-sm font-medium text-gray-900">
-                        {grant ? formatCurrency(engagement.amount, grant.currency) : engagement.amount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <select
-                          value={engagement.status}
-                          onChange={(e) => updateEngagementStatus(engagement.id, e.target.value as Engagement['status'])}
-                          className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${ENGAGEMENT_STATUS[engagement.status].color}`}
-                        >
-                          <option value="pending">En attente</option>
-                          <option value="approved">Approuvé</option>
-                          <option value="rejected">Rejeté</option>
-                        </select>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <div className="flex items-center justify-center space-x-1">
-                          <button
-                            onClick={() => viewEngagementDetails(engagement)}
-                            className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                            title="Voir les détails"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => startEdit(engagement)}
-                            className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                            title="Modifier"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
     </div>
   );
 };

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Banknote, TrendingUp, TrendingDown, AlertCircle, CheckCircle } from 'lucide-react';
-import { showSuccess, showValidationError, confirmDelete } from '../utils/alerts';
+import { showSuccess, showValidationError, confirmDelete, showError } from '../utils/alerts';
 import { Payment, BankAccount, BankTransaction, PAYMENT_STATUS, Grant } from '../types';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface TreasuryManagerProps {
   payments: Payment[];
@@ -22,7 +23,11 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
   onAddBankTransaction,
   onUpdateBankAccount
 }) => {
+  // 1. TOUS les hooks doivent être appelés AVANT toute logique conditionnelle
   const [showTransactionForm, setShowTransactionForm] = useState(false);
+  
+  // Vérification des permissions
+  const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
   
   // Filtrer les comptes bancaires pour n'afficher que celui de la subvention active
   const filteredBankAccounts = selectedGrant && selectedGrant.bankAccount 
@@ -57,6 +62,36 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
     }
   }, [selectedGrant]);
 
+  // 2. MAINTENANT nous pouvons faire la vérification conditionnelle
+  if (permissionsLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement des permissions...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasModuleAccess('treasury')) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Banknote className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-700 mb-2">Accès non autorisé</h2>
+          <p className="text-gray-500">Vous n'avez pas les permissions nécessaires pour accéder à ce module.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Définition des permissions spécifiques au module
+  const canView = hasPermission('treasury', 'view');
+  const canCreate = hasPermission('treasury', 'create');
+  const canDelete = hasPermission('treasury', 'delete');
+  const canManageAccounts = hasPermission('treasury', 'manage_accounts');
+
   // Fonction pour formater les montants avec la devise de la subvention active
   const formatCurrency = (amount: number) => {
     if (!selectedGrant) return amount.toLocaleString('fr-FR');
@@ -83,6 +118,11 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
   const handleTransactionSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
+    if (!canCreate) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de créer des transactions');
+      return;
+    }
+    
     if (!transactionFormData.accountId) {
       showValidationError('Compte manquant', 'Veuillez sélectionner un compte bancaire');
       return;
@@ -107,6 +147,7 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       reference: transactionFormData.reference.trim()
     });
 
+    showSuccess('Transaction ajoutée', 'La transaction a été ajoutée avec succès');
     resetTransactionForm();
   };
 
@@ -121,6 +162,19 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
     return bankTransactions.filter(transaction => transaction.accountId === accountId);
   };
 
+  // Si l'utilisateur n'a pas la permission de view, on n'affiche que le message d'accès refusé
+  if (!canView) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Banknote className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-700 mb-2">Accès non autorisé</h2>
+          <p className="text-gray-500">Vous n'avez pas les permissions nécessaires pour visualiser le module de trésorerie.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -130,13 +184,15 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
           <p className="text-gray-600 mt-1">Suivi des comptes bancaires et des paiements</p>
         </div>
         <div className="flex space-x-3">
-          <button
-            onClick={() => setShowTransactionForm(true)}
-            className="bg-green-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-green-700 transition-colors flex items-center space-x-2"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Transaction</span>
-          </button>
+          {canCreate && (
+            <button
+              onClick={() => setShowTransactionForm(true)}
+              className="bg-green-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-green-700 transition-colors flex items-center space-x-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Transaction</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -254,20 +310,22 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                     </div>
                   )}
                   
-                  {!selectedGrant && (
+                  {!selectedGrant && canManageAccounts && (
                     <div className="flex space-x-2 mt-3">
-                      <button
-                        onClick={() => {
-                          confirmDelete(
-                            'Supprimer le compte',
-                            `Êtes-vous sûr de vouloir supprimer le compte "${account.name}" ?`,
-                            () => onDeleteBankAccount(account.id)
-                          );
-                        }}
-                        className="w-full px-3 py-1 text-sm bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors"
-                      >
-                        Supprimer
-                      </button>
+                      {canDelete && (
+                        <button
+                          onClick={() => {
+                            confirmDelete(
+                              'Supprimer le compte',
+                              `Êtes-vous sûr de vouloir supprimer le compte "${account.name}" ?`,
+                              () => onDeleteBankAccount(account.id)
+                            );
+                          }}
+                          className="w-full px-3 py-1 text-sm bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors"
+                        >
+                          Supprimer
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

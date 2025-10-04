@@ -53,7 +53,7 @@ export const DEFAULT_PERMISSIONS: Permission[] = [
     id: '2',
     name: 'Planification budgétaire',
     code: 'BUDGET_PLANNING',
-    module: 'planning',
+    module: 'budget_planning',
     actions: ['create', 'read', 'update', 'delete']
   },
   {
@@ -70,57 +70,51 @@ export const DEFAULT_PERMISSIONS: Permission[] = [
     module: 'engagements',
     actions: ['create', 'read', 'update', 'approve']
   },
+  
   {
     id: '5',
-    name: 'Validation des engagements',
-    code: 'ENGAGEMENTS_VALIDATION',
-    module: 'engagements',
-    actions: ['validate']
-  },
-  {
-    id: '6',
     name: 'Gestion des paiements',
     code: 'PAYMENTS_MANAGEMENT',
     module: 'payments',
     actions: ['create', 'read', 'update', 'approve']
   },
   {
-    id: '7',
-    name: 'Validation des paiements',
-    code: 'PAYMENTS_VALIDATION',
-    module: 'payments',
+    id: '6',
+    name: 'Validation',
+    code: 'VALIDATION',
+    module: 'all',
     actions: ['validate']
   },
   {
-    id: '8',
+    id: '7',
     name: 'Gestion de trésorerie',
     code: 'TREASURY_MANAGEMENT',
     module: 'treasury',
     actions: ['create', 'read', 'update', 'delete']
   },
   {
-    id: '9',
+    id: '8',
     name: 'Préfinancements',
     code: 'PREFINANCING_MANAGEMENT',
     module: 'prefinancing',
     actions: ['create', 'read', 'update', 'approve', 'validate']
   },
   {
-    id: '10',
+    id: '9',
     name: 'Prêts employés',
     code: 'LOANS_MANAGEMENT',
     module: 'loans',
     actions: ['create', 'read', 'update', 'approve', 'validate']
   },
   {
-    id: '11',
+    id: '10',
     name: 'Rapports et analyses',
     code: 'REPORTS_ACCESS',
     module: 'reports',
     actions: ['read', 'export']
   },
   {
-    id: '13',
+    id: '11',
     name: 'Lecture seule globale',
     code: 'READ_ONLY_ACCESS',
     module: 'all',
@@ -153,7 +147,7 @@ export const DEFAULT_ROLES: UserRole[] = [
     code: 'FINANCE_MANAGER',
     description: 'Gestion complète des budgets et validation des paiements',
     permissions: DEFAULT_PERMISSIONS.filter(p => 
-      ['grants', 'planning', 'tracking', 'engagements', 'payments', 'treasury', 'prefinancing', 'loans', 'reports'].includes(p.module)
+      ['grants', 'budget_planning', 'tracking', 'engagements', 'payments', 'treasury', 'prefinancing', 'loans', 'reports'].includes(p.module)
     ),
     color: 'bg-blue-100 text-blue-700',
     isActive: true,

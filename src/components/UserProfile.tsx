@@ -1,17 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { User, Edit, Save, X, Eye, EyeOff, Shield, Mail, Phone, Calendar, Briefcase, Hash } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
+import { usePermissions } from '../hooks/usePermissions';
 import { showSuccess, showError, showValidationError } from '../utils/alerts';
 import { usersService } from '../services/supabaseService';
 import { supabase } from '../lib/supabase';
 
 const UserProfile: React.FC = () => {
   const { userProfile, userRole, signOut } = useAuth();
+  
+// === SYSTÈME DE PERMISSIONS ===
+  const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
+
+  // === HOOKS DE BASE ===
   const [isEditing, setIsEditing] = useState(false);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
 
   const [profileData, setProfileData] = useState({
     firstName: '',
@@ -27,6 +34,12 @@ const UserProfile: React.FC = () => {
     confirmPassword: ''
   });
 
+  // Permissions spécifiques au module Profile
+  const canView = hasPermission('profile', 'view');
+  const canUpdate = hasPermission('profile', 'edit');
+  const canChangePassword = hasPermission('profile', 'edit');
+  const canViewSensitive = hasPermission('profile', 'view');
+
   useEffect(() => {
     if (userProfile) {
       setProfileData({
@@ -34,13 +47,60 @@ const UserProfile: React.FC = () => {
         lastName: userProfile.lastName,
         email: userProfile.email,
         profession: userProfile.profession || '',
-        employeeId: userProfile.employeeId || ''
+        employeeId: canViewSensitive ? (userProfile.employeeId || '') : '***'
       });
     }
-  }, [userProfile]);
+  }, [userProfile, canViewSensitive]);
+
+    
+
+  
+
+  // === VÉRIFICATION DES PERMISSIONS - APRÈS LES HOOKS ===
+  if (permissionsLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement des permissions...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasModuleAccess('profile')) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <User className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-700 mb-2">Accès non autorisé</h2>
+          <p className="text-gray-500">Vous n'avez pas les permissions nécessaires pour accéder au profil.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!canView) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <User className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-700 mb-2">Permission refusée</h2>
+          <p className="text-gray-500">Vous n'avez pas la permission de visualiser les profils.</p>
+        </div>
+      </div>
+    );
+  }
+
+  
 
   const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!canUpdate) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de modifier le profil');
+      return;
+    }
     
     if (!profileData.firstName || !profileData.lastName || !profileData.email) {
       showValidationError('Champs obligatoires manquants', 'Veuillez remplir le prénom, le nom et l\'email');
@@ -53,7 +113,7 @@ const UserProfile: React.FC = () => {
         lastName: profileData.lastName,
         email: profileData.email,
         profession: profileData.profession,
-        employeeId: profileData.employeeId,
+        employeeId: canViewSensitive ? profileData.employeeId : userProfile.employeeId,
         updatedAt: new Date().toISOString()
       });
 
@@ -61,7 +121,7 @@ const UserProfile: React.FC = () => {
       setIsEditing(false);
       
       // Recharger la page pour mettre à jour les données dans l'interface
-      window.location.reload();
+      // window.location.reload();
     } catch (error) {
       showError('Erreur', 'Impossible de mettre à jour le profil');
     }
@@ -69,6 +129,11 @@ const UserProfile: React.FC = () => {
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!canChangePassword) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de modifier le mot de passe');
+      return;
+    }
     
     if (!passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword) {
       showValidationError('Champs obligatoires manquants', 'Veuillez remplir tous les champs du mot de passe');
@@ -126,7 +191,7 @@ const UserProfile: React.FC = () => {
         lastName: userProfile.lastName,
         email: userProfile.email,
         profession: userProfile.profession || '',
-        employeeId: userProfile.employeeId || ''
+        employeeId: canViewSensitive ? (userProfile.employeeId || '') : '***'
       });
     }
     setIsEditing(false);
@@ -163,7 +228,7 @@ const UserProfile: React.FC = () => {
           <p className="text-gray-600 mt-1">Gérez vos informations personnelles et paramètres de compte</p>
         </div>
         <div className="flex items-center space-x-3">
-          {!isEditing && (
+          {!isEditing && canUpdate && (
             <button
               onClick={() => setIsEditing(true)}
               className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
@@ -224,7 +289,7 @@ const UserProfile: React.FC = () => {
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
                     placeholder="Votre prénom"
                     required
-                    disabled={!isEditing}
+                    disabled={!isEditing || !canUpdate}
                   />
                 </div>
 
@@ -240,7 +305,7 @@ const UserProfile: React.FC = () => {
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
                     placeholder="Votre nom"
                     required
-                    disabled={!isEditing}
+                    disabled={!isEditing || !canUpdate}
                   />
                 </div>
               </div>
@@ -257,7 +322,7 @@ const UserProfile: React.FC = () => {
                   className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
                   placeholder="votre.email@entreprise.com"
                   required
-                  disabled={!isEditing}
+                  disabled
                 />
               </div>
 
@@ -273,7 +338,7 @@ const UserProfile: React.FC = () => {
                     onChange={(e) => setProfileData(prev => ({ ...prev, profession: e.target.value }))}
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
                     placeholder="Ex: Directeur Financier"
-                    disabled={!isEditing}
+                    disabled
                   />
                 </div>
 
@@ -285,16 +350,22 @@ const UserProfile: React.FC = () => {
                   <input
                     type="text"
                     value={profileData.employeeId}
-                    onChange={(e) => setProfileData(prev => ({ ...prev, employeeId: e.target.value }))}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
+                    onChange={(e) => canViewSensitive && setProfileData(prev => ({ ...prev, employeeId: e.target.value }))}
+                    className={`w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors ${
+                      !canViewSensitive ? 'bg-gray-100 text-gray-500' : ''
+                    }`}
                     placeholder="Ex: ADMIN-001"
-                    disabled={!isEditing}
+                    disabled
+                    title={!canViewSensitive ? "Vous n'avez pas la permission de voir cette information" : ""}
                   />
+                  {!canViewSensitive && (
+                    <p className="text-xs text-gray-500 mt-1">Information sensible - accès restreint</p>
+                  )}
                 </div>
               </div>
 
               {/* Action Buttons */}
-              {isEditing && (
+              {isEditing && canUpdate && (
                 <div className="flex space-x-4 pt-6 border-t border-gray-200">
                   <button
                     type="button"
@@ -316,125 +387,127 @@ const UserProfile: React.FC = () => {
           </div>
 
           {/* Password Change Section */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mt-6">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-gray-900">Sécurité du Compte</h3>
-              {!showPasswordForm && (
-                <button
-                  onClick={() => setShowPasswordForm(true)}
-                  className="bg-gradient-to-r from-orange-600 to-red-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
-                >
-                  <Shield className="w-4 h-4" />
-                  <span>Changer le mot de passe</span>
-                </button>
-              )}
-            </div>
-
-            {!showPasswordForm ? (
-              <div className="bg-gray-50 rounded-xl p-4">
-                <div className="flex items-center space-x-3">
-                  <Shield className="w-5 h-5 text-gray-600" />
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">Mot de passe</p>
-                    <p className="text-sm text-gray-600">Dernière modification: {userProfile.updatedAt ? new Date(userProfile.updatedAt).toLocaleDateString('fr-FR') : 'Inconnue'}</p>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <form onSubmit={handlePasswordSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Mot de passe actuel *
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showCurrentPassword ? 'text' : 'password'}
-                      value={passwordData.currentPassword}
-                      onChange={(e) => setPasswordData(prev => ({ ...prev, currentPassword: e.target.value }))}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-12 transition-colors"
-                      placeholder="Votre mot de passe actuel"
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                      className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                    >
-                      {showCurrentPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Nouveau mot de passe *
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showNewPassword ? 'text' : 'password'}
-                      value={passwordData.newPassword}
-                      onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-12 transition-colors"
-                      placeholder="Nouveau mot de passe (min. 6 caractères)"
-                      required
-                      minLength={6}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowNewPassword(!showNewPassword)}
-                      className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                    >
-                      {showNewPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Confirmer le nouveau mot de passe *
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showConfirmPassword ? 'text' : 'password'}
-                      value={passwordData.confirmPassword}
-                      onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-12 transition-colors"
-                      placeholder="Confirmer le nouveau mot de passe"
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                      className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                    >
-                      {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                    </button>
-                  </div>
-                  {passwordData.newPassword && passwordData.confirmPassword && passwordData.newPassword !== passwordData.confirmPassword && (
-                    <p className="text-red-500 text-sm mt-1">Les mots de passe ne correspondent pas</p>
-                  )}
-                </div>
-
-                <div className="flex space-x-3 pt-4">
+          {canChangePassword && (
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mt-6">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-semibold text-gray-900">Sécurité du Compte</h3>
+                {!showPasswordForm && (
                   <button
-                    type="button"
-                    onClick={cancelPasswordChange}
-                    className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
-                  >
-                    Annuler
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={passwordData.newPassword !== passwordData.confirmPassword || passwordData.newPassword.length < 6}
-                    className="flex-1 bg-gradient-to-r from-orange-600 to-red-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-2"
+                    onClick={() => setShowPasswordForm(true)}
+                    className="bg-gradient-to-r from-orange-600 to-red-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
                   >
                     <Shield className="w-4 h-4" />
-                    <span>Modifier le mot de passe</span>
+                    <span>Changer le mot de passe</span>
                   </button>
+                )}
+              </div>
+
+              {!showPasswordForm ? (
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <div className="flex items-center space-x-3">
+                    <Shield className="w-5 h-5 text-gray-600" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">Mot de passe</p>
+                      <p className="text-sm text-gray-600">Dernière modification: {userProfile.updatedAt ? new Date(userProfile.updatedAt).toLocaleDateString('fr-FR') : 'Inconnue'}</p>
+                    </div>
+                  </div>
                 </div>
-              </form>
-            )}
-          </div>
+              ) : (
+                <form onSubmit={handlePasswordSubmit} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Mot de passe actuel *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showCurrentPassword ? 'text' : 'password'}
+                        value={passwordData.currentPassword}
+                        onChange={(e) => setPasswordData(prev => ({ ...prev, currentPassword: e.target.value }))}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-12 transition-colors"
+                        placeholder="Votre mot de passe actuel"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                        className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                      >
+                        {showCurrentPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Nouveau mot de passe *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showNewPassword ? 'text' : 'password'}
+                        value={passwordData.newPassword}
+                        onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-12 transition-colors"
+                        placeholder="Nouveau mot de passe (min. 6 caractères)"
+                        required
+                        minLength={6}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPassword(!showNewPassword)}
+                        className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                      >
+                        {showNewPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Confirmer le nouveau mot de passe *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showConfirmPassword ? 'text' : 'password'}
+                        value={passwordData.confirmPassword}
+                        onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-12 transition-colors"
+                        placeholder="Confirmer le nouveau mot de passe"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                      >
+                        {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      </button>
+                    </div>
+                    {passwordData.newPassword && passwordData.confirmPassword && passwordData.newPassword !== passwordData.confirmPassword && (
+                      <p className="text-red-500 text-sm mt-1">Les mots de passe ne correspondent pas</p>
+                    )}
+                  </div>
+
+                  <div className="flex space-x-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={cancelPasswordChange}
+                      className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={passwordData.newPassword !== passwordData.confirmPassword || passwordData.newPassword.length < 6}
+                      className="flex-1 bg-gradient-to-r from-orange-600 to-red-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-2"
+                    >
+                      <Shield className="w-4 h-4" />
+                      <span>Modifier le mot de passe</span>
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Account Information */}
@@ -520,16 +593,18 @@ const UserProfile: React.FC = () => {
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Actions Rapides</h3>
             
             <div className="space-y-3">
-              <button
-                onClick={() => setShowPasswordForm(true)}
-                className="w-full flex items-center space-x-3 px-4 py-3 text-left bg-orange-50 hover:bg-orange-100 rounded-xl transition-colors"
-              >
-                <Shield className="w-5 h-5 text-orange-600" />
-                <div>
-                  <p className="font-medium text-gray-900">Changer le mot de passe</p>
-                  <p className="text-sm text-gray-600">Modifier votre mot de passe de connexion</p>
-                </div>
-              </button>
+              {canChangePassword && (
+                <button
+                  onClick={() => setShowPasswordForm(true)}
+                  className="w-full flex items-center space-x-3 px-4 py-3 text-left bg-orange-50 hover:bg-orange-100 rounded-xl transition-colors"
+                >
+                  <Shield className="w-5 h-5 text-orange-600" />
+                  <div>
+                    <p className="font-medium text-gray-900">Changer le mot de passe</p>
+                    <p className="text-sm text-gray-600">Modifier votre mot de passe de connexion</p>
+                  </div>
+                </button>
+              )}
 
               <button
                 onClick={() => {

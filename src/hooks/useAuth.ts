@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { User as SupabaseUser, AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
-import { User, UserRole } from '../types/user';
-import { DEFAULT_ROLES } from '../types/user';
+import { User, UserRole, DEFAULT_ROLES } from '../types/user';
+// import { DEFAULT_ROLES } from '../types/user';
 
 export const useAuth = () => {
   const [user, setUser] = useState<SupabaseUser | null>(null);

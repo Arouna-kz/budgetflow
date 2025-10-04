@@ -2,11 +2,24 @@
 
 export interface User {
   id: string;
+  name?: string;
+  firstName?: string;
+  lastName?: string;
   email: string;
-  name: string;
-  role: 'admin' | 'user' | 'readonly';
-  createdAt: Date;
+  profession: string; // Rôle métier : 'Coordonnateur National', 'Comptable', etc.
+  role?: {
+    name: string;
+    permissions?: string[];
+  };
 }
+
+export interface AuthContextType {
+  user: User | null;
+  login: (userData: User) => void;
+  logout: () => void;
+  hasPermission: (module: string, action: string) => boolean; // Pour les permissions fines
+}
+
 
 export interface Grant {
   id: string;
@@ -37,6 +50,7 @@ export interface BudgetLine {
   plannedAmount: number;
   notifiedAmount: number;
   engagedAmount: number;
+  spentAmount: number;
   availableAmount: number;
   description?: string;
   color: string;
@@ -51,6 +65,7 @@ export interface SubBudgetLine {
   plannedAmount: number;
   notifiedAmount: number;
   engagedAmount: number;
+  spentAmount: number;
   availableAmount: number;
   description?: string;
 }
@@ -69,9 +84,24 @@ export interface Engagement {
   date: string;
   status: 'pending' | 'approved' | 'paid' | 'rejected';
   approvals?: {
-    supervisor1?: { name: string; date: string; signature: boolean };
-    supervisor2?: { name: string; date: string; signature: boolean };
-    finalApproval?: { name: string; date: string; signature: boolean };
+    supervisor1?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
+    supervisor2?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
+    finalApproval?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
   };
 }
 
@@ -99,9 +129,24 @@ export interface Payment {
   status: 'pending' | 'approved' | 'paid' | 'cashed' | 'rejected';
   cashedDate?: string;
   approvals?: {
-    supervisor1?: { name: string; date: string; signature: boolean };
-    supervisor2?: { name: string; date: string; signature: boolean };
-    finalApproval?: { name: string; date: string; signature: boolean };
+    supervisor1?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
+    supervisor2?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
+    finalApproval?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
   };
 }
 
@@ -151,9 +196,24 @@ export interface Prefinancing {
   }[];
   description: string;
   approvals?: {
-    supervisor1?: { name: string; date: string; signature: boolean };
-    supervisor2?: { name: string; date: string; signature: boolean };
-    finalApproval?: { name: string; date: string; signature: boolean };
+    supervisor1?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
+    supervisor2?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
+    finalApproval?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
   };
 }
 
@@ -184,9 +244,24 @@ export interface EmployeeLoan {
   }[];
   status: 'pending' | 'approved' | 'active' | 'completed' | 'rejected';
   approvals?: {
-    supervisor1?: { name: string; date: string; signature: boolean };
-    supervisor2?: { name: string; date: string; signature: boolean };
-    finalApproval?: { name: string; date: string; signature: boolean };
+    supervisor1?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
+    supervisor2?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
+    finalApproval?: { 
+      name: string; 
+      date: string; 
+      signature: boolean; 
+      observation?: string 
+    };
   };
 }
 
@@ -197,6 +272,7 @@ export const DEFAULT_BUDGET_LINES: Omit<BudgetLine, 'id' | 'grantId'>[] = [
     plannedAmount: 0,
     notifiedAmount: 0,
     engagedAmount: 0,
+    spentAmount: 0,
     availableAmount: 0,
     description: 'Frais de personnel et consultants',
     color: 'bg-blue-100 text-blue-700'
@@ -207,6 +283,7 @@ export const DEFAULT_BUDGET_LINES: Omit<BudgetLine, 'id' | 'grantId'>[] = [
     plannedAmount: 0,
     notifiedAmount: 0,
     engagedAmount: 0,
+    spentAmount: 0,
     availableAmount: 0,
     description: 'Achat d\'équipements et matériels',
     color: 'bg-green-100 text-green-700'
@@ -217,6 +294,7 @@ export const DEFAULT_BUDGET_LINES: Omit<BudgetLine, 'id' | 'grantId'>[] = [
     plannedAmount: 0,
     notifiedAmount: 0,
     engagedAmount: 0,
+    spentAmount: 0,
     availableAmount: 0,
     description: 'Frais de fonctionnement et services',
     color: 'bg-yellow-100 text-yellow-700'
@@ -227,6 +305,7 @@ export const DEFAULT_BUDGET_LINES: Omit<BudgetLine, 'id' | 'grantId'>[] = [
     plannedAmount: 0,
     notifiedAmount: 0,
     engagedAmount: 0,
+    spentAmount: 0,
     availableAmount: 0,
     description: 'Activités de formation et renforcement des capacités',
     color: 'bg-purple-100 text-purple-700'

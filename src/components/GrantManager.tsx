@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Plus, Edit, Trash2, Banknote, Calendar, Building, ChevronLeft, ChevronRight } from 'lucide-react';
 import { showSuccess, showError, showValidationError, confirmDelete } from '../utils/alerts';
 import { Grant, BudgetLine, GRANT_STATUS } from '../types';
+import { usePermissions } from '../hooks/usePermissions';
+
 
 interface GrantManagerProps {
   grants: Grant[];
@@ -24,11 +26,10 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   onUpdateBudgetLine,
   onUpdateSubBudgetLine
 }) => {
+  // 1. TOUS les hooks doivent être appelés AVANT toute logique conditionnelle
   const [showForm, setShowForm] = useState(false);
   const [editingGrant, setEditingGrant] = useState<Grant | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
-  
   const [formData, setFormData] = useState({
     name: '',
     reference: '',
@@ -45,6 +46,40 @@ const GrantManager: React.FC<GrantManagerProps> = ({
     bankName: '',
     initialBalance: ''
   });
+  
+  const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
+  
+  const itemsPerPage = 10;
+
+  // 2. MAINTENANT nous pouvons faire la vérification conditionnelle
+  if (permissionsLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement des permissions...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasModuleAccess('grants')) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Banknote className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-700 mb-2">Accès non autorisé</h2>
+          <p className="text-gray-500">Vous n'avez pas les permissions nécessaires pour accéder à ce module.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Le reste du code reste inchangé...
+  const canCreate = hasPermission('grants', 'create');
+  const canEdit = hasPermission('grants', 'edit');
+  const canDelete = hasPermission('grants', 'delete');
+  const canView = hasPermission('grants', 'view');
 
   // Trier les subventions par ID décroissant (plus récentes en haut)
   const sortedGrants = [...grants].sort((a, b) => parseInt(b.id) - parseInt(a.id));
@@ -78,6 +113,16 @@ const GrantManager: React.FC<GrantManagerProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!canCreate && !editingGrant) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de créer des subventions');
+      return;
+    }
+
+    if (!canEdit && editingGrant) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de modifier des subventions');
+      return;
+    }
     
     // Vérification uniquement des champs obligatoires (sans les infos bancaires)
     if (!formData.name || !formData.reference || !formData.grantingOrganization || !formData.totalAmount) {
@@ -168,6 +213,8 @@ const GrantManager: React.FC<GrantManagerProps> = ({
         description: formData.description,
         bankAccount: bankAccount
       });
+
+      showSuccess('Subvention modifiée', 'La subvention a été modifiée avec succès');
     } else {
       onAddGrant({
         name: formData.name,
@@ -175,7 +222,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
         grantingOrganization: formData.grantingOrganization,
         year: formData.year,
         currency: formData.currency,
-        plannedAmount: 0, // Initialisé à 0, sera calculé automatiquement
+        plannedAmount: 0,
         totalAmount: notifiedAmount,
         startDate: formData.startDate,
         endDate: formData.endDate,
@@ -189,6 +236,11 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   };
 
   const startEdit = (grant: Grant) => {
+    if (!canEdit) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de modifier des subventions');
+      return;
+    }
+    
     setEditingGrant(grant);
     setFormData({
       name: grant.name,
@@ -207,6 +259,22 @@ const GrantManager: React.FC<GrantManagerProps> = ({
       initialBalance: grant.bankAccount?.balance?.toString() || ''
     });
     setShowForm(true);
+  };
+
+  const handleDelete = async (grant: Grant) => {
+    if (!canDelete) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de supprimer des subventions');
+      return;
+    }
+
+    const confirmed = await confirmDelete(
+      'Supprimer la subvention',
+      `Êtes-vous sûr de vouloir supprimer la subvention "${grant.name}" ? Cette action est irréversible.`
+    );
+    if (confirmed) {
+      onDeleteGrant(grant.id);
+      showSuccess('Subvention supprimée', 'La subvention a été supprimée avec succès');
+    }
   };
 
   const getCurrencySymbol = (currency: Grant['currency']) => {
@@ -253,18 +321,20 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Gestion des Subventions</h2>
           <p className="text-gray-600 mt-1">Gérez vos subventions et financements</p>
         </div>
-        <button
-          onClick={() => setShowForm(true)}
-          className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Nouvelle Subvention</span>
-        </button>
+        {canCreate && (
+          <button
+            onClick={() => setShowForm(true)}
+            className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2 w-full sm:w-auto justify-center"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Nouvelle Subvention</span>
+          </button>
+        )}
       </div>
 
       {/* Form Modal */}
@@ -435,7 +505,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
               </div>
 
               {/* Bank Account Information */}
-              <div className="bg-green-50 rounded-xl p-6">
+              <div className="bg-green-50 rounded-xl p-4 md:p-6">
                 <h4 className="text-lg font-semibold text-gray-900 mb-4">Informations du Compte Bancaire (Optionnel)</h4>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -502,17 +572,17 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                 </div>
               </div>
 
-              <div className="flex justify-end space-x-3 pt-4">
+              <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-3 pt-4">
                 <button
                   type="button"
                   onClick={resetForm}
-                  className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                  className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors w-full sm:w-auto"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors w-full sm:w-auto"
                 >
                   {editingGrant ? 'Modifier' : 'Créer'}
                 </button>
@@ -524,8 +594,8 @@ const GrantManager: React.FC<GrantManagerProps> = ({
 
       {/* Grants List */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-6">
+        <div className="p-4 md:p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6 gap-4">
             <h3 className="text-lg font-semibold text-gray-900">
               Subventions ({grants.length})
             </h3>
@@ -563,18 +633,18 @@ const GrantManager: React.FC<GrantManagerProps> = ({
               {currentGrants.map((grant) => {
                 const grantBudgetLines = budgetLines.filter(line => line.grantId === grant.id);
                 const totalEngaged = grantBudgetLines.reduce((sum, line) => sum + line.engagedAmount, 0);
-                const totalSpent = grantBudgetLines.reduce((sum, line) => sum + (line.engagedAmount || 0), 0);
+                const totalSpent = grantBudgetLines.reduce((sum, line) => sum + (line.spentAmount || 0), 0);
                 const remainingAmount = grant.totalAmount - totalEngaged;
                 const utilizationRate = grant.totalAmount > 0 ? (totalEngaged / grant.totalAmount) * 100 : 0;
                 const daysRemaining = grant.endDate ? getDaysRemaining(grant.endDate) : null;
 
                 return (
-                  <div key={grant.id} className="border border-gray-200 rounded-xl p-6 hover:shadow-md transition-shadow">
-                    <div className="flex items-start justify-between mb-4">
+                  <div key={grant.id} className="border border-gray-200 rounded-xl p-4 md:p-6 hover:shadow-md transition-shadow">
+                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between mb-4 gap-4">
                       <div className="flex-1">
-                        <div className="flex items-center space-x-3 mb-2">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-3 mb-2 gap-2">
                           <h4 className="text-lg font-semibold text-gray-900">{grant.name}</h4>
-                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                          <span className={`px-2 py-1 text-xs font-medium rounded-full w-fit ${
                             grant.status === 'active' ? 'bg-green-100 text-green-800' :
                             grant.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
                             grant.status === 'completed' ? 'bg-blue-100 text-blue-800' :
@@ -585,78 +655,88 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                              grant.status === 'completed' ? 'Terminée' : 'Suspendue'}
                           </span>
                         </div>
-                        <div className="flex items-center space-x-4 text-sm text-gray-600 mb-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 text-sm text-gray-600 mb-3 gap-1">
                           <span className="flex items-center space-x-1">
                             <Building className="w-4 h-4" />
                             <span>{grant.grantingOrganization}</span>
                           </span>
+                          <span className="hidden sm:block">•</span>
                           <span>Réf: {grant.reference}</span>
+                          <span className="hidden sm:block">•</span>
                           <span>{grant.year}</span>
                           {grant.endDate && daysRemaining !== null && (
-                            <span className={`flex items-center space-x-1 ${
-                              daysRemaining < 30 ? 'text-red-600' : daysRemaining < 90 ? 'text-yellow-600' : 'text-green-600'
-                            }`}>
-                              <Calendar className="w-4 h-4" />
-                              <span>
-                                {daysRemaining > 0 ? `${daysRemaining} jours restants` : 
-                                 daysRemaining === 0 ? 'Expire aujourd\'hui' : 'Expiré'}
+                            <>
+                              <span className="hidden sm:block">•</span>
+                              <span className={`flex items-center space-x-1 ${
+                                daysRemaining < 30 ? 'text-red-600' : daysRemaining < 90 ? 'text-yellow-600' : 'text-green-600'
+                              }`}>
+                                <Calendar className="w-4 h-4" />
+                                <span>
+                                  {daysRemaining > 0 ? `${daysRemaining} jours restants` : 
+                                   daysRemaining === 0 ? 'Expire aujourd\'hui' : 'Expiré'}
+                                </span>
                               </span>
-                            </span>
+                            </>
                           )}
                         </div>
                         {grant.description && (
-                          <p className="text-sm text-gray-600 mb-3">{grant.description}</p>
+                          <p className="text-sm text-gray-600 mb-3 line-clamp-2">{grant.description}</p>
                         )}
                       </div>
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={() => startEdit(grant)}
-                          className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={async () => {
-                            const confirmed = await confirmDelete(
-                              'Supprimer la subvention',
-                              `Êtes-vous sûr de vouloir supprimer la subvention "${grant.name}" ? Cette action est irréversible.`
-                            );
-                            if (confirmed) {
-                              onDeleteGrant(grant.id);
-                              showSuccess('Subvention supprimée', 'La subvention a été supprimée avec succès');
-                            }
-                          }}
-                          className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+                      {(canEdit || canDelete) && (
+                        <div className="flex items-center space-x-2 self-end lg:self-auto">
+                          {canEdit && (
+                            <button
+                              onClick={() => startEdit(grant)}
+                              className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="Modifier"
+                            >
+                              <Edit className="w-4 h-4" />
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button
+                              onClick={() => handleDelete(grant)}
+                              className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Supprimer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Financial Summary */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                      <div className="bg-blue-50 rounded-lg p-3">
-                        <p className="text-xs text-blue-600 font-medium mb-1">Montant notifié</p>
-                        <p className="text-lg font-semibold text-blue-900">
-                          {formatCurrency(grant.totalAmount, grant.currency)}
-                        </p>
-                      </div>
+                    <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 md:gap-4 mb-4">
                       <div className="bg-green-50 rounded-lg p-3">
-                        <p className="text-xs text-green-600 font-medium mb-1">Planifié</p>
-                        <p className="text-lg font-semibold text-green-900">
+                        <p className="text-xs text-green-600 font-medium mb-1">Montant Planifié</p>
+                        <p className="text-sm md:text-lg font-semibold text-green-900">
                           {formatCurrency(grant.plannedAmount, grant.currency)}
                         </p>
                       </div>
+                      <div className="bg-blue-50 rounded-lg p-3">
+                        <p className="text-xs text-blue-600 font-medium mb-1">Montant Notifié</p>
+                        <p className="text-sm md:text-lg font-semibold text-blue-900">
+                          {formatCurrency(grant.totalAmount, grant.currency)}
+                        </p>
+                      </div>
                       <div className="bg-orange-50 rounded-lg p-3">
-                        <p className="text-xs text-orange-600 font-medium mb-1">Engagé</p>
-                        <p className="text-lg font-semibold text-orange-900">
+                        <p className="text-xs text-orange-600 font-medium mb-1">Montant Engagé</p>
+                        <p className="text-sm md:text-lg font-semibold text-orange-900">
                           {formatCurrency(totalEngaged, grant.currency)}
                         </p>
                       </div>
                       <div className="bg-purple-50 rounded-lg p-3">
-                        <p className="text-xs text-purple-600 font-medium mb-1">Dépensé</p>
-                        <p className="text-lg font-semibold text-purple-900">
-                          {formatCurrency(totalEngaged, grant.currency)}
+                        <p className="text-xs text-purple-600 font-medium mb-1">Montant Décaissé</p>
+                        <p className="text-sm md:text-lg font-semibold text-purple-900">
+                          {formatCurrency(totalSpent, grant.currency)}
+                        </p>
+                      </div>
+                      <div className="bg-red-50 rounded-lg p-3">
+                        <p className="text-xs text-red-600 font-medium mb-1">Montant restant à Décaisser</p>
+                        <p className="text-sm md:text-lg font-semibold text-red-900">
+                          {formatCurrency(totalEngaged - totalSpent, grant.currency)}
                         </p>
                       </div>
                     </div>
@@ -680,7 +760,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
 
                     {/* Remaining Amount */}
                     <div className="flex justify-between items-center text-sm">
-                      <span className="text-gray-600">Montant restant:</span>
+                      <span className="text-gray-600">Montant non engagé:</span>
                       <span className={`font-semibold ${
                         remainingAmount < 0 ? 'text-red-600' : 'text-green-600'
                       }`}>
@@ -712,14 +792,14 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                           </div>
                           <div>
                             <p className="text-sm text-green-700 font-medium">Solde</p>
-                            <p className="text-xl font-bold text-green-600">
+                            <p className="text-lg md:text-xl font-bold text-green-600">
                               {formatCurrency(grant.bankAccount.balance, grant.currency)}
                             </p>
                           </div>
                         </div>
                         <div className="mt-2">
                           <p className="text-sm text-green-700 font-medium">Numéro de compte</p>
-                          <p className="text-green-900 font-mono text-sm">{grant.bankAccount.accountNumber}</p>
+                          <p className="text-green-900 font-mono text-sm break-all">{grant.bankAccount.accountNumber}</p>
                         </div>
                       </div>
                     )}
@@ -732,7 +812,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
 
         {/* Pagination */}
         {totalPages > 1 && (
-          <div className="flex justify-center items-center space-x-2 mt-6">
+          <div className="flex justify-center items-center space-x-2 mt-6 p-4 border-t border-gray-100">
             <button
               onClick={goToPreviousPage}
               disabled={currentPage === 1}
@@ -741,19 +821,32 @@ const GrantManager: React.FC<GrantManagerProps> = ({
               Précédent
             </button>
             
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-              <button
-                key={page}
-                onClick={() => goToPage(page)}
-                className={`px-3 py-2 text-sm rounded-lg ${
-                  currentPage === page
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                }`}
-              >
-                {page}
-              </button>
-            ))}
+            {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+              let pageNum;
+              if (totalPages <= 7) {
+                pageNum = i + 1;
+              } else if (currentPage <= 4) {
+                pageNum = i + 1;
+              } else if (currentPage >= totalPages - 3) {
+                pageNum = totalPages - 6 + i;
+              } else {
+                pageNum = currentPage - 3 + i;
+              }
+
+              return (
+                <button
+                  key={pageNum}
+                  onClick={() => goToPage(pageNum)}
+                  className={`px-3 py-2 text-sm rounded-lg min-w-[40px] ${
+                    currentPage === pageNum
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  }`}
+                >
+                  {pageNum}
+                </button>
+              );
+            })}
             
             <button
               onClick={goToNextPage}

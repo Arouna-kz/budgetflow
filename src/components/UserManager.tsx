@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, Users, Shield, Eye, EyeOff, Key, UserCheck } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Plus, Edit, Trash2, Users, Shield, Eye, EyeOff, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Search, Menu, X } from 'lucide-react';
 import { showSuccess, showError, showWarning, showValidationError, confirmDelete } from '../utils/alerts';
 import { User, UserRole, DEFAULT_ROLES, USER_STATUS, Permission, PermissionAction } from '../types/user';
 import { supabase } from '../lib/supabase';
 import { usersService } from '../services/supabaseService';
+import { PermissionService } from '../services/permissionService';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface UserManagerProps {
   users: User[];
@@ -25,6 +27,10 @@ interface PermissionSelection {
   selectedActions: string[];
 }
 
+type UserSortField = 'firstName' | 'lastName' | 'email' | 'profession' | 'role' | 'status' | 'lastLogin';
+type RoleSortField = 'name' | 'code' | 'usersCount' | 'permissionsCount' | 'status';
+type SortDirection = 'asc' | 'desc';
+
 const UserManager: React.FC<UserManagerProps> = ({
   users,
   roles,
@@ -36,6 +42,7 @@ const UserManager: React.FC<UserManagerProps> = ({
   onUpdateRole,
   onDeleteRole
 }) => {
+  // États principaux
   const [activeTab, setActiveTab] = useState<'users' | 'roles'>('users');
   const [showUserForm, setShowUserForm] = useState(false);
   const [showRoleForm, setShowRoleForm] = useState(false);
@@ -44,6 +51,17 @@ const UserManager: React.FC<UserManagerProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // États pour la pagination et tri
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [userSortField, setUserSortField] = useState<UserSortField>('firstName');
+  const [roleSortField, setRoleSortField] = useState<RoleSortField>('name');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [isMobileView, setIsMobileView] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+
+  // États pour les formulaires
   const [userFormData, setUserFormData] = useState({
     email: '',
     firstName: '',
@@ -65,6 +83,69 @@ const UserManager: React.FC<UserManagerProps> = ({
     permissionSelections: [] as PermissionSelection[]
   });
 
+  // États pour la logique signataire
+  const [selectedRole, setSelectedRole] = useState<UserRole | null>(null);
+  const [isSignatoryRole, setIsSignatoryRole] = useState(false);
+
+  // Vérification des permissions
+  const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
+
+  // Définition des permissions
+  const canViewUsers = hasPermission('users', 'view');
+  const canCreateUsers = hasPermission('users', 'create');
+  const canEditUsers = hasPermission('users', 'edit');
+  const canDeleteUsers = hasPermission('users', 'delete');
+  const canViewRoles = hasPermission('users', 'view');
+  const canCreateRoles = hasPermission('users', 'create');
+  const canEditRoles = hasPermission('users', 'edit');
+  const canDeleteRoles = hasPermission('users', 'delete');
+
+  // Options pour les signataires
+  const signatoryFunctions = [
+    'Coordinateur de la Subvention',
+    'Comptable',
+    'Coordonnateur National'
+  ];
+
+  // Détection de la taille d'écran
+  useEffect(() => {
+    const checkScreenSize = () => {
+      setIsMobileView(window.innerWidth < 768);
+      if (window.innerWidth >= 768) {
+        setShowMobileMenu(false);
+      }
+    };
+
+    checkScreenSize();
+    window.addEventListener('resize', checkScreenSize);
+    return () => window.removeEventListener('resize', checkScreenSize);
+  }, []);
+
+  // Vérifier si le rôle sélectionné a la permission signataire
+  useEffect(() => {
+    if (userFormData.roleId) {
+      const role = roles.find(r => r.id === userFormData.roleId);
+      setSelectedRole(role || null);
+      
+      if (role) {
+        const hasSignPermission = role.permissions.some(permission => 
+          permission.actions.includes('sign')
+        );
+        setIsSignatoryRole(hasSignPermission);
+        
+        if (hasSignPermission && !signatoryFunctions.includes(userFormData.profession)) {
+          setUserFormData(prev => ({ ...prev, profession: '' }));
+        }
+      } else {
+        setIsSignatoryRole(false);
+      }
+    } else {
+      setSelectedRole(null);
+      setIsSignatoryRole(false);
+    }
+  }, [userFormData.roleId, roles]);
+
+  // Réinitialiser les formulaires
   const resetUserForm = () => {
     setUserFormData({
       email: '',
@@ -80,6 +161,8 @@ const UserManager: React.FC<UserManagerProps> = ({
     setShowUserForm(false);
     setEditingUser(null);
     setShowPassword(false);
+    setSelectedRole(null);
+    setIsSignatoryRole(false);
   };
 
   const resetRoleForm = () => {
@@ -95,12 +178,30 @@ const UserManager: React.FC<UserManagerProps> = ({
     setEditingRole(null);
   };
 
+  // Gestion de la soumission des formulaires
   const handleUserSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!canCreateUsers && !editingUser) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de créer des utilisateurs');
+      return;
+    }
+
+    if (!canEditUsers && editingUser) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de modifier des utilisateurs');
+      return;
+    }
+
     setLoading(true);
     
     if (!userFormData.email || !userFormData.firstName || !userFormData.lastName || !userFormData.roleId) {
       showValidationError('Champs obligatoires manquants', 'Veuillez remplir tous les champs marqués d\'un astérisque (*)');
+      setLoading(false);
+      return;
+    }
+
+    if (isSignatoryRole && !userFormData.profession) {
+      showValidationError('Fonction requise', 'Pour un rôle signataire, vous devez sélectionner une fonction');
       setLoading(false);
       return;
     }
@@ -126,68 +227,73 @@ const UserManager: React.FC<UserManagerProps> = ({
         onUpdateUser(editingUser.id, updatedUser);
         showSuccess('Succès', 'Utilisateur modifié avec succès');
       } else {
-            // ÉTAPE 1 : Création dans Supabase Auth
-            const { data: authData, error: authError } = await supabase.auth.signUp({
-                email: userFormData.email,
-                password: userFormData.password,
-                options: {
-                    data: {
-                        first_name: userFormData.firstName,
-                        last_name: userFormData.lastName,
-                        profession: userFormData.profession
-                    }
-                }
-            });
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+          email: userFormData.email,
+          password: userFormData.password,
+          options: {
+            data: {
+              first_name: userFormData.firstName,
+              last_name: userFormData.lastName,
+              profession: userFormData.profession
+            }
+          }
+        });
 
-            if (authError) throw authError;
-            if (!authData.user) throw new Error('Erreur lors de la création du compte auth');
+        if (authError) throw authError;
+        if (!authData.user) throw new Error('Erreur lors de la création du compte auth');
 
-            // ✅ CORRECTION 1 : Récupérer l'ID de l'utilisateur nouvellement créé
-            const newUserId = authData.user.id; 
+        const newUserId = authData.user.id;
 
-            const newUserData = {
-                id: newUserId, // ✅ CORRECTION 2 : Ajouter l'ID ici
-                email: userFormData.email,
-                firstName: userFormData.firstName,
-                lastName: userFormData.lastName,
-                profession: userFormData.profession,
-                employeeId: userFormData.employeeId,
-                roleId: userFormData.roleId,
-                isActive: userFormData.isActive,
-                createdBy: currentUser.id
-            };
+        const newUserData = {
+          id: newUserId,
+          email: userFormData.email,
+          firstName: userFormData.firstName,
+          lastName: userFormData.lastName,
+          profession: userFormData.profession,
+          employeeId: userFormData.employeeId,
+          roleId: userFormData.roleId,
+          isActive: userFormData.isActive,
+          createdBy: currentUser.id
+        };
 
-            // ÉTAPE 2 : Création dans la table 'users' avec l'ID correct
-            const newUser = await usersService.create(newUserData);
-            onAddUser(newUser);
-            
-            showSuccess('Succès', 'Utilisateur créé avec succès. Un email de confirmation a été envoyé.');
-        }
+        const newUser = await usersService.create(newUserData);
+        onAddUser(newUser);
+        
+        showSuccess('Succès', 'Utilisateur créé avec succès. Un email de confirmation a été envoyé.');
+      }
 
-        resetUserForm();
+      resetUserForm();
     } catch (error: any) {
-        console.error('Error in user operation:', error);
-        showError('Erreur', error.message || 'Une erreur est survenue');
+      console.error('Error in user operation:', error);
+      showError('Erreur', error.message || 'Une erreur est survenue');
     } finally {
-        setLoading(false);
+      setLoading(false);
     }
   };
 
   const handleRoleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
+    if (!canCreateRoles && !editingRole) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de créer des rôles');
+      return;
+    }
+
+    if (!canEditRoles && editingRole) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de modifier des rôles');
+      return;
+    }
+
     if (!roleFormData.name || !roleFormData.code || !roleFormData.description) {
       showValidationError('Champs obligatoires manquants', 'Veuillez remplir le nom, le code et la description du rôle');
       return;
     }
 
-    const permissions: Permission[] = roleFormData.permissionSelections
+    const permissions = roleFormData.permissionSelections
       .filter(selection => selection.selectedActions.length > 0)
       .map(selection => ({
-        id: selection.id,
-        name: selection.name,
         module: selection.module,
-        actions: selection.selectedActions as PermissionAction[]
+        actions: selection.selectedActions
       }));
 
     if (editingRole) {
@@ -214,7 +320,168 @@ const UserManager: React.FC<UserManagerProps> = ({
     resetRoleForm();
   };
 
+  // Gestion du tri
+  const handleUserSort = (field: UserSortField) => {
+    if (userSortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setUserSortField(field);
+      setSortDirection('asc');
+    }
+    setCurrentPage(1);
+  };
+
+  const handleRoleSort = (field: RoleSortField) => {
+    if (roleSortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setRoleSortField(field);
+      setSortDirection('asc');
+    }
+    setCurrentPage(1);
+  };
+
+  const SortIcon = ({ field, type }: { field: UserSortField | RoleSortField, type: 'users' | 'roles' }) => {
+    const currentSortField = type === 'users' ? userSortField : roleSortField;
+    if (currentSortField !== field) return <ChevronUp className="w-3 h-3 sm:w-4 sm:h-4 opacity-30" />;
+    return sortDirection === 'asc' ? 
+      <ChevronUp className="w-3 h-3 sm:w-4 sm:h-4" /> : 
+      <ChevronDown className="w-3 h-3 sm:w-4 sm:h-4" />;
+  };
+
+  // Préparation des données avec calculs
+  const usersWithRoles = useMemo(() => {
+    return users.map(user => {
+      const userRole = roles.find(role => role.id === user.roleId);
+      return {
+        ...user,
+        roleName: userRole?.name || 'Rôle supprimé',
+        roleColor: userRole?.color || 'bg-gray-100 text-gray-700',
+        isSignatory: userRole ? userRole.permissions.some(p => p.actions.includes('sign')) : false
+      };
+    });
+  }, [users, roles]);
+
+  const rolesWithStats = useMemo(() => {
+    return roles.map(role => {
+      const usersWithRole = users.filter(user => user.roleId === role.id);
+      const isSignatory = role.permissions.some(p => p.actions.includes('sign'));
+      
+      return {
+        ...role,
+        usersCount: usersWithRole.length,
+        permissionsCount: role.permissions.length,
+        isSignatory
+      };
+    });
+  }, [roles, users]);
+
+  // Filtrage et tri des données
+  const filteredAndSortedUsers = useMemo(() => {
+    let filtered = usersWithRoles.filter(user =>
+      user.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.profession.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.roleName.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    // Tri
+    filtered.sort((a, b) => {
+      let aValue: any, bValue: any;
+
+      switch (userSortField) {
+        case 'firstName':
+        case 'lastName':
+        case 'email':
+        case 'profession':
+          aValue = a[userSortField]?.toLowerCase() || '';
+          bValue = b[userSortField]?.toLowerCase() || '';
+          break;
+        case 'role':
+          aValue = a.roleName.toLowerCase();
+          bValue = b.roleName.toLowerCase();
+          break;
+        case 'status':
+          aValue = a.isActive;
+          bValue = b.isActive;
+          break;
+        case 'lastLogin':
+          aValue = a.lastLogin ? new Date(a.lastLogin).getTime() : 0;
+          bValue = b.lastLogin ? new Date(b.lastLogin).getTime() : 0;
+          break;
+        default:
+          aValue = a[userSortField];
+          bValue = b[userSortField];
+      }
+
+      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    return filtered;
+  }, [usersWithRoles, searchTerm, userSortField, sortDirection]);
+
+  const filteredAndSortedRoles = useMemo(() => {
+    let filtered = rolesWithStats.filter(role =>
+      role.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      role.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      role.description.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    // Tri
+    filtered.sort((a, b) => {
+      let aValue: any, bValue: any;
+
+      switch (roleSortField) {
+        case 'name':
+        case 'code':
+          aValue = a[roleSortField]?.toLowerCase() || '';
+          bValue = b[roleSortField]?.toLowerCase() || '';
+          break;
+        case 'usersCount':
+        case 'permissionsCount':
+          aValue = a[roleSortField];
+          bValue = b[roleSortField];
+          break;
+        case 'status':
+          aValue = a.isActive;
+          bValue = b.isActive;
+          break;
+        default:
+          aValue = a[roleSortField];
+          bValue = b[roleSortField];
+      }
+
+      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    return filtered;
+  }, [rolesWithStats, searchTerm, roleSortField, sortDirection]);
+
+  // Pagination
+  const currentData = activeTab === 'users' ? filteredAndSortedUsers : filteredAndSortedRoles;
+  const totalPages = Math.ceil(currentData.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const paginatedData = currentData.slice(startIndex, startIndex + itemsPerPage);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, activeTab]);
+
+  // Fonctions d'édition
   const startEditUser = (user: User) => {
+    if (!canEditUsers) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de modifier des utilisateurs');
+      return;
+    }
+
+    const userRole = roles.find(role => role.id === user.roleId);
+    const isSignatory = userRole ? userRole.permissions.some(p => p.actions.includes('sign')) : false;
+    
     setEditingUser(user);
     setUserFormData({
       email: user.email,
@@ -227,18 +494,26 @@ const UserManager: React.FC<UserManagerProps> = ({
       confirmPassword: '',
       isActive: user.isActive
     });
+    
+    setSelectedRole(userRole || null);
+    setIsSignatoryRole(isSignatory);
     setShowUserForm(true);
   };
 
   const startEditRole = (role: UserRole) => {
-    const permissionSelections: PermissionSelection[] = DEFAULT_ROLES[0].permissions.map(defaultPermission => {
-      const rolePermission = role.permissions.find(p => p.id === defaultPermission.id);
+    if (!canEditRoles) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de modifier des rôles');
+      return;
+    }
+
+    const permissionSelections: PermissionSelection[] = PermissionService.getAvailableModules().map(moduleConfig => {
+      const rolePermission = role.permissions.find(p => p.module === moduleConfig.module);
       
       return {
-        id: defaultPermission.id,
-        name: defaultPermission.name,
-        module: defaultPermission.module,
-        actions: defaultPermission.actions,
+        id: moduleConfig.module,
+        name: moduleConfig.label,
+        module: moduleConfig.module,
+        actions: moduleConfig.actions,
         selectedActions: rolePermission ? rolePermission.actions : []
       };
     });
@@ -255,15 +530,44 @@ const UserManager: React.FC<UserManagerProps> = ({
     setShowRoleForm(true);
   };
 
-  const getRole = (roleId: string) => {
-    return roles.find(role => role.id === roleId);
+  const handleDeleteUser = (user: User) => {
+    if (!canDeleteUsers) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de supprimer des utilisateurs');
+      return;
+    }
+
+    if (user.id === currentUser.id) {
+      showError('Action impossible', 'Vous ne pouvez pas supprimer votre propre compte');
+      return;
+    }
+
+    confirmDelete(
+      'Supprimer l\'utilisateur',
+      `Êtes-vous sûr de vouloir supprimer l'utilisateur ${user.firstName} ${user.lastName} ?`,
+      () => onDeleteUser(user.id)
+    );
   };
 
-  const getCreatedBy = (userId: string) => {
-    const user = users.find(u => u.id === userId);
-    return user ? `${user.firstName} ${user.lastName}` : 'Système';
+  const handleDeleteRole = (role: UserRole) => {
+    if (!canDeleteRoles) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de supprimer des rôles');
+      return;
+    }
+
+    const usersWithRole = users.filter(user => user.roleId === role.id);
+    if (usersWithRole.length > 0) {
+      showError('Action impossible', `Ce rôle est assigné à ${usersWithRole.length} utilisateur(s). Vous ne pouvez pas le supprimer.`);
+      return;
+    }
+
+    confirmDelete(
+      'Supprimer le rôle',
+      `Êtes-vous sûr de vouloir supprimer le rôle ${role.name} ?`,
+      () => onDeleteRole(role.id)
+    );
   };
 
+  // Options de couleurs
   const colorOptions = [
     { value: 'bg-red-100 text-red-700', label: 'Rouge', preview: 'bg-red-100' },
     { value: 'bg-blue-100 text-blue-700', label: 'Bleu', preview: 'bg-blue-100' },
@@ -275,13 +579,14 @@ const UserManager: React.FC<UserManagerProps> = ({
     { value: 'bg-orange-100 text-orange-700', label: 'Orange', preview: 'bg-orange-100' }
   ];
 
+  // Initialisation des permissions du formulaire de rôle
   useEffect(() => {
     if (showRoleForm && !editingRole && roleFormData.permissionSelections.length === 0) {
-      const initialPermissionSelections: PermissionSelection[] = DEFAULT_ROLES[0].permissions.map(permission => ({
-        id: permission.id,
-        name: permission.name,
-        module: permission.module,
-        actions: permission.actions,
+      const initialPermissionSelections: PermissionSelection[] = PermissionService.getAvailableModules().map(module => ({
+        id: module.module,
+        name: module.label,
+        module: module.module,
+        actions: module.actions,
         selectedActions: []
       }));
       
@@ -289,29 +594,99 @@ const UserManager: React.FC<UserManagerProps> = ({
     }
   }, [showRoleForm, editingRole]);
 
+  // Vérification des permissions de module
+  if (permissionsLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement des permissions...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasModuleAccess('users') && !hasModuleAccess('roles')) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Shield className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-700 mb-2">Accès non autorisé</h2>
+          <p className="text-gray-500">Vous n'avez pas les permissions nécessaires pour accéder à ce module.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="space-y-4 sm:space-y-6 p-3 sm:p-4">
+      {/* Header Mobile */}
+      <div className="lg:hidden">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">Gestion des Utilisateurs</h2>
+            <p className="text-sm text-gray-600 mt-1">Administration centralisée</p>
+          </div>
+          <button
+            onClick={() => setShowMobileMenu(!showMobileMenu)}
+            className="p-2 bg-gray-100 rounded-lg"
+          >
+            {showMobileMenu ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
+        </div>
+
+        {/* Menu mobile */}
+        {showMobileMenu && (
+          <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-4 mb-4">
+            <div className="space-y-3">
+              {canCreateRoles && (
+                <button
+                  onClick={() => setShowRoleForm(true)}
+                  className="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white px-4 py-2 rounded-xl font-medium flex items-center justify-center space-x-2"
+                >
+                  <Shield className="w-4 h-4" />
+                  <span>Nouveau Rôle</span>
+                </button>
+              )}
+              {canCreateUsers && (
+                <button
+                  onClick={() => setShowUserForm(true)}
+                  className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium flex items-center justify-center space-x-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Nouvel Utilisateur</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Header Desktop */}
+      <div className="hidden lg:flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Gestion des Utilisateurs</h2>
           <p className="text-gray-600 mt-1">Administration centralisée des utilisateurs et des rôles</p>
         </div>
         <div className="flex space-x-3">
-          <button
-            onClick={() => setShowRoleForm(true)}
-            className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
-          >
-            <Shield className="w-4 h-4" />
-            <span>Nouveau Rôle</span>
-          </button>
-          <button
-            onClick={() => setShowUserForm(true)}
-            className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Nouvel Utilisateur</span>
-          </button>
+          {canCreateRoles && (
+            <button
+              onClick={() => setShowRoleForm(true)}
+              className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
+            >
+              <Shield className="w-4 h-4" />
+              <span>Nouveau Rôle</span>
+            </button>
+          )}
+          {canCreateUsers && (
+            <button
+              onClick={() => setShowUserForm(true)}
+              className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Nouvel Utilisateur</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -319,253 +694,496 @@ const UserManager: React.FC<UserManagerProps> = ({
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="border-b border-gray-200">
           <nav className="flex space-x-8 px-6">
-            <button
-              onClick={() => setActiveTab('users')}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === 'users'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              <div className="flex items-center space-x-2">
-                <Users className="w-4 h-4" />
-                <span>Utilisateurs ({users.length})</span>
-              </div>
-            </button>
-            <button
-              onClick={() => setActiveTab('roles')}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === 'roles'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              <div className="flex items-center space-x-2">
-                <Shield className="w-4 h-4" />
-                <span>Rôles ({roles.length})</span>
-              </div>
-            </button>
+            {canViewUsers && (
+              <button
+                onClick={() => setActiveTab('users')}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeTab === 'users'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                <div className="flex items-center space-x-2">
+                  <Users className="w-4 h-4" />
+                  <span>Utilisateurs ({users.length})</span>
+                </div>
+              </button>
+            )}
+            {canViewRoles && (
+              <button
+                onClick={() => setActiveTab('roles')}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeTab === 'roles'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                <div className="flex items-center space-x-2">
+                  <Shield className="w-4 h-4" />
+                  <span>Rôles ({roles.length})</span>
+                </div>
+              </button>
+            )}
           </nav>
         </div>
 
-        <div className="p-6">
-          {activeTab === 'users' && (
+        <div className="p-4 sm:p-6">
+          {/* Barre de recherche et pagination */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
+            <div className="relative w-full sm:w-auto">
+              <Search className="w-3 h-3 sm:w-4 sm:h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Rechercher..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent w-full text-sm"
+              />
+            </div>
+
+            <div className="flex items-center space-x-2 w-full sm:w-auto">
+              <select
+                value={itemsPerPage}
+                onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+              >
+                <option value="5">5 lignes</option>
+                <option value="10">10 lignes</option>
+                <option value="20">20 lignes</option>
+                <option value="50">50 lignes</option>
+              </select>
+            </div>
+          </div>
+
+          {activeTab === 'users' && canViewUsers && (
             <div className="space-y-4">
-              {users.length === 0 ? (
+              {filteredAndSortedUsers.length === 0 ? (
                 <div className="text-center py-12">
                   <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
                     <Users className="w-8 h-8 text-gray-400" />
                   </div>
                   <h3 className="text-lg font-medium text-gray-900 mb-2">Aucun utilisateur</h3>
                   <p className="text-gray-500 mb-4">Commencez par créer votre premier utilisateur</p>
-                  <button
-                    onClick={() => setShowUserForm(true)}
-                    className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors"
-                  >
-                    Créer un utilisateur
-                  </button>
+                  {canCreateUsers && (
+                    <button
+                      onClick={() => setShowUserForm(true)}
+                      className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors"
+                    >
+                      Créer un utilisateur
+                    </button>
+                  )}
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Utilisateur
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Fonction
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Rôle
-                        </th>
-                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Statut
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Dernière connexion
-                        </th>
-                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {users.map(user => {
-                        const userRole = getRole(user.roleId);
-                        return (
-                          <tr key={user.id} className="hover:bg-gray-50">
-                            <td className="px-6 py-4">
-                              <div className="flex items-center space-x-3">
-                                <div className="w-10 h-10 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full flex items-center justify-center">
-                                  <span className="text-white font-medium text-sm">
+                <>
+                  {/* Version mobile */}
+                  {isMobileView ? (
+                    <div className="space-y-3">
+                      {paginatedData.map((user) => (
+                        <div key={user.id} className="bg-gray-50 rounded-lg p-3 border">
+                          <div className="flex justify-between items-start mb-2">
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-2 mb-1">
+                                <div className="w-8 h-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full flex items-center justify-center">
+                                  <span className="text-white font-medium text-xs">
                                     {user.firstName.charAt(0)}{user.lastName.charAt(0)}
                                   </span>
                                 </div>
                                 <div>
-                                  <div className="text-sm font-medium text-gray-900">
+                                  <h4 className="font-semibold text-gray-900 text-sm">
                                     {user.firstName} {user.lastName}
-                                  </div>
-                                  <div className="text-sm text-gray-500">{user.email}</div>
-                                  {user.employeeId && (
-                                    <div className="text-xs text-gray-400">ID: {user.employeeId}</div>
-                                  )}
+                                  </h4>
+                                  <p className="text-xs text-gray-600 truncate">{user.email}</p>
                                 </div>
                               </div>
-                            </td>
-                            <td className="px-6 py-4 text-sm text-gray-500">
-                              {user.profession || 'Non spécifiée'}
-                            </td>
-                            <td className="px-6 py-4">
-                              {userRole && (
-                                <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${userRole.color}`}>
-                                  {userRole.name}
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-6 py-4 text-center">
-                              <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
-                                user.isActive ? USER_STATUS.active.color : USER_STATUS.inactive.color
-                              }`}>
-                                {user.isActive ? USER_STATUS.active.label : USER_STATUS.inactive.label}
+                            </div>
+                            <span className={`text-xs px-2 py-1 rounded-full ${user.isActive ? USER_STATUS.active.color : USER_STATUS.inactive.color}`}>
+                              {user.isActive ? USER_STATUS.active.label : USER_STATUS.inactive.label}
+                            </span>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-2 text-xs mb-2">
+                            <div>
+                              <span className="text-gray-600">Fonction:</span>
+                              <p className="font-medium truncate">{user.profession || 'Non spécifiée'}</p>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Rôle:</span>
+                              <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${user.roleColor}`}>
+                                {user.roleName}
                               </span>
-                            </td>
-                            <td className="px-6 py-4 text-sm text-gray-500">
-                              {user.lastLogin 
+                            </div>
+                          </div>
+
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs text-gray-500">
+                              Dern. connexion: {user.lastLogin 
                                 ? new Date(user.lastLogin).toLocaleDateString('fr-FR')
-                                : 'Jamais connecté'
+                                : 'Jamais'
                               }
-                            </td>
-                            <td className="px-6 py-4 text-center">
-                              <div className="flex items-center justify-center space-x-1">
+                            </span>
+                            <div className="flex space-x-1">
+                              {canEditUsers && (
                                 <button
                                   onClick={() => startEditUser(user)}
-                                  className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                  title="Modifier"
+                                  className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
                                 >
-                                  <Edit className="w-4 h-4" />
+                                  <Edit className="w-3 h-3" />
                                 </button>
-                                {user.id !== currentUser.id && (
-                                  <button
-                                    onClick={() => {
-                                      if (confirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ?')) {
-                                        onDeleteUser(user.id);
-                                      }
-                                    }}
-                                    className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                    title="Supprimer"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                )}
+                              )}
+                              {canDeleteUsers && user.id !== currentUser.id && (
+                                <button
+                                  onClick={() => handleDeleteUser(user)}
+                                  className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    /* Version desktop */
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleUserSort('firstName')}>
+                              <div className="flex items-center space-x-1">
+                                <span>Utilisateur</span>
+                                <SortIcon field="firstName" type="users" />
                               </div>
-                            </td>
+                            </th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleUserSort('profession')}>
+                              <div className="flex items-center space-x-1">
+                                <span>Fonction</span>
+                                <SortIcon field="profession" type="users" />
+                              </div>
+                            </th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleUserSort('role')}>
+                              <div className="flex items-center space-x-1">
+                                <span>Rôle</span>
+                                <SortIcon field="role" type="users" />
+                              </div>
+                            </th>
+                            <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleUserSort('status')}>
+                              <div className="flex items-center justify-center space-x-1">
+                                <span>Statut</span>
+                                <SortIcon field="status" type="users" />
+                              </div>
+                            </th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleUserSort('lastLogin')}>
+                              <div className="flex items-center space-x-1">
+                                <span>Dernière connexion</span>
+                                <SortIcon field="lastLogin" type="users" />
+                              </div>
+                            </th>
+                            <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Actions
+                            </th>
                           </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {paginatedData.map(user => (
+                            <tr key={user.id} className="hover:bg-gray-50">
+                              <td className="px-4 py-3">
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full flex items-center justify-center">
+                                    <span className="text-white font-medium text-xs">
+                                      {user.firstName.charAt(0)}{user.lastName.charAt(0)}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <div className="text-sm font-medium text-gray-900">
+                                      {user.firstName} {user.lastName}
+                                    </div>
+                                    <div className="text-sm text-gray-500">{user.email}</div>
+                                    {user.employeeId && (
+                                      <div className="text-xs text-gray-400">ID: {user.employeeId}</div>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-500">
+                                {user.profession || 'Non spécifiée'}
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${user.roleColor}`}>
+                                  {user.roleName}
+                                </span>
+                                {user.isSignatory && (
+                                  <span className="inline-block ml-1 px-1 py-0.5 text-xs bg-green-100 text-green-800 rounded">
+                                    Signataire
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                                  user.isActive ? USER_STATUS.active.color : USER_STATUS.inactive.color
+                                }`}>
+                                  {user.isActive ? USER_STATUS.active.label : USER_STATUS.inactive.label}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-500">
+                                {user.lastLogin 
+                                  ? new Date(user.lastLogin).toLocaleDateString('fr-FR')
+                                  : 'Jamais connecté'
+                                }
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <div className="flex items-center justify-center space-x-1">
+                                  {canEditUsers && (
+                                    <button
+                                      onClick={() => startEditUser(user)}
+                                      className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                      title="Modifier"
+                                    >
+                                      <Edit className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  {canDeleteUsers && user.id !== currentUser.id && (
+                                    <button
+                                      onClick={() => handleDeleteUser(user)}
+                                      className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                      title="Supprimer"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
 
-          {activeTab === 'roles' && (
+          {activeTab === 'roles' && canViewRoles && (
             <div className="space-y-4">
-              {roles.length === 0 ? (
+              {filteredAndSortedRoles.length === 0 ? (
                 <div className="text-center py-12">
                   <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
                     <Shield className="w-8 h-8 text-gray-400" />
                   </div>
                   <h3 className="text-lg font-medium text-gray-900 mb-2">Aucun rôle</h3>
                   <p className="text-gray-500 mb-4">Commencez par créer votre premier rôle</p>
-                  <button
-                    onClick={() => setShowRoleForm(true)}
-                    className="bg-purple-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-purple-700 transition-colors"
-                  >
-                    Créer un rôle
-                  </button>
+                  {canCreateRoles && (
+                    <button
+                      onClick={() => setShowRoleForm(true)}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-purple-700 transition-colors"
+                    >
+                      Créer un rôle
+                    </button>
+                  )}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {roles.map(role => {
-                    const usersWithRole = users.filter(user => user.roleId === role.id);
-                    return (
-                      <div key={role.id} className="bg-gray-50 rounded-xl p-6">
-                        <div className="flex items-start justify-between mb-4">
-                          <div className="flex items-center space-x-3">
-                            <div className="p-2 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg">
-                              <Shield className="w-5 h-5 text-white" />
+                <>
+                  {/* Version mobile */}
+                  {isMobileView ? (
+                    <div className="space-y-3">
+                      {paginatedData.map((role) => (
+                        <div key={role.id} className="bg-gray-50 rounded-lg p-3 border">
+                          <div className="flex justify-between items-start mb-2">
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-2 mb-1">
+                                <div className="p-1 bg-gradient-to-r from-purple-600 to-pink-600 rounded">
+                                  <Shield className="w-3 h-3 text-white" />
+                                </div>
+                                <div>
+                                  <h4 className="font-semibold text-gray-900 text-sm">{role.name}</h4>
+                                  <p className="text-xs text-gray-600">{role.code}</p>
+                                </div>
+                              </div>
                             </div>
-                            <div>
-                              <h3 className="font-semibold text-gray-900">{role.name}</h3>
-                              <p className="text-sm text-gray-600">{role.code}</p>
-                            </div>
-                          </div>
-                          
-                          <div className="flex items-center space-x-1">
-                            <span className={`px-2 py-1 text-xs font-medium rounded-full ${role.color}`}>
+                            <span className={`text-xs px-2 py-1 rounded-full ${role.color}`}>
                               {role.isActive ? 'Actif' : 'Inactif'}
                             </span>
-                            <button
-                              onClick={() => startEditRole(role)}
-                              className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                            >
-                              <Edit className="w-4 h-4" />
-                            </button>
-                            {usersWithRole.length === 0 && (
+                          </div>
+                          
+                          <p className="text-xs text-gray-600 mb-2 line-clamp-2">{role.description}</p>
+
+                          <div className="grid grid-cols-2 gap-2 text-xs mb-2">
+                            <div>
+                              <span className="text-gray-600">Utilisateurs:</span>
+                              <p className="font-medium">{role.usersCount}</p>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Permissions:</span>
+                              <p className="font-medium">{role.permissionsCount}</p>
+                            </div>
+                          </div>
+
+                          {role.isSignatory && (
+                            <span className="inline-block mb-2 px-2 py-0.5 text-xs bg-green-100 text-green-800 rounded-full">
+                              Rôle Signataire
+                            </span>
+                          )}
+
+                          <div className="flex justify-end space-x-1">
+                            {canEditRoles && (
                               <button
-                                onClick={() => {
-                                  if (confirm('Êtes-vous sûr de vouloir supprimer ce rôle ?')) {
-                                    onDeleteRole(role.id);
-                                  }
-                                }}
-                                className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                title="Supprimer"
+                                onClick={() => startEditRole(role)}
+                                className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
                               >
-                                <Trash2 className="w-4 h-4" />
+                                <Edit className="w-3 h-3" />
+                              </button>
+                            )}
+                            {canDeleteRoles && role.usersCount === 0 && (
+                              <button
+                                onClick={() => handleDeleteRole(role)}
+                                className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                              >
+                                <Trash2 className="w-3 h-3" />
                               </button>
                             )}
                           </div>
                         </div>
-
-                        <p className="text-sm text-gray-600 mb-4">{role.description}</p>
-
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium text-gray-700">Utilisateurs assignés</span>
-                            <span className="text-sm font-bold text-blue-600">{usersWithRole.length}</span>
-                          </div>
-                          
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium text-gray-700">Permissions</span>
-                            <span className="text-sm font-bold text-purple-600">{role.permissions.length}</span>
-                          </div>
-
-                          {role.permissions.length > 0 && (
-                            <div className="mt-3">
-                              <p className="text-xs font-medium text-gray-600 mb-2">Modules autorisés :</p>
-                              <div className="flex flex-wrap gap-1">
-                                {[...new Set(role.permissions.map(p => p.module))].map(module => (
-                                  <span key={module} className="px-2 py-1 text-xs bg-white text-gray-600 rounded border">
-                                    {module}
+                      ))}
+                    </div>
+                  ) : (
+                    /* Version desktop */
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {paginatedData.map(role => (
+                        <div key={role.id} className="bg-gray-50 rounded-xl p-4">
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex items-center space-x-3">
+                              <div className="p-2 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg">
+                                <Shield className="w-4 h-4 text-white" />
+                              </div>
+                              <div>
+                                <h3 className="font-semibold text-gray-900">{role.name}</h3>
+                                <p className="text-sm text-gray-600">{role.code}</p>
+                                {role.isSignatory && (
+                                  <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-green-100 text-green-800 rounded-full">
+                                    Signataire
                                   </span>
-                                ))}
+                                )}
                               </div>
                             </div>
-                          )}
+                            
+                            <div className="flex items-center space-x-1">
+                              <span className={`px-2 py-1 text-xs font-medium rounded-full ${role.color}`}>
+                                {role.isActive ? 'Actif' : 'Inactif'}
+                              </span>
+                              {canEditRoles && (
+                                <button
+                                  onClick={() => startEditRole(role)}
+                                  className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                >
+                                  <Edit className="w-3 h-3" />
+                                </button>
+                              )}
+                              {canDeleteRoles && role.usersCount === 0 && (
+                                <button
+                                  onClick={() => handleDeleteRole(role)}
+                                  className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Supprimer"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          <p className="text-sm text-gray-600 mb-3">{role.description}</p>
+
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium text-gray-700">Utilisateurs assignés</span>
+                              <span className="text-sm font-bold text-blue-600">{role.usersCount}</span>
+                            </div>
+                            
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium text-gray-700">Permissions</span>
+                              <span className="text-sm font-bold text-purple-600">{role.permissionsCount}</span>
+                            </div>
+
+                            {role.permissions.length > 0 && (
+                              <div className="mt-2">
+                                <p className="text-xs font-medium text-gray-600 mb-1">Modules autorisés :</p>
+                                <div className="flex flex-wrap gap-1">
+                                  {[...new Set(role.permissions.map(p => p.module))].slice(0, 3).map(module => (
+                                    <span key={module} className="px-2 py-0.5 text-xs bg-white text-gray-600 rounded border">
+                                      {module}
+                                    </span>
+                                  ))}
+                                  {[...new Set(role.permissions.map(p => p.module))].length > 3 && (
+                                    <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-500 rounded">
+                                      +{[...new Set(role.permissions.map(p => p.module))].length - 3}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Pagination */}
+          {currentData.length > 0 && totalPages > 1 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-gray-200">
+              <div className="text-xs sm:text-sm text-gray-700">
+                Lignes {startIndex + 1}-{Math.min(startIndex + itemsPerPage, currentData.length)} sur {currentData.length}
+              </div>
+              <div className="flex items-center space-x-1">
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={currentPage === 1}
+                  className="p-2 text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                
+                <div className="flex space-x-1">
+                  {Array.from({ length: Math.min(3, totalPages) }, (_, i) => {
+                    let pageNum;
+                    if (totalPages <= 3) pageNum = i + 1;
+                    else if (currentPage === 1) pageNum = i + 1;
+                    else if (currentPage === totalPages) pageNum = totalPages - 2 + i;
+                    else pageNum = currentPage - 1 + i;
+
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => setCurrentPage(pageNum)}
+                        className={`px-3 py-1 rounded text-xs ${
+                          currentPage === pageNum
+                            ? 'bg-blue-600 text-white'
+                            : 'border border-gray-300'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
                     );
                   })}
                 </div>
-              )}
+
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  disabled={currentPage === totalPages}
+                  className="p-2 text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* User Form Modal */}
+      {/* Modals pour les formulaires (inchangés) */}
       {showUserForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -573,7 +1191,7 @@ const UserManager: React.FC<UserManagerProps> = ({
               {editingUser ? 'Modifier l\'utilisateur' : 'Nouvel utilisateur'}
             </h3>
             
-            <form onSubmit={handleUserSubmit} className="space-y-4">
+<form onSubmit={handleUserSubmit} className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -618,34 +1236,7 @@ const UserManager: React.FC<UserManagerProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Fonction
-                  </label>
-                  <input
-                    type="text"
-                    value={userFormData.profession}
-                    onChange={(e) => setUserFormData(prev => ({ ...prev, profession: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Ex: Développeur"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Matricule employé
-                  </label>
-                  <input
-                    type="text"
-                    value={userFormData.employeeId}
-                    onChange={(e) => setUserFormData(prev => ({ ...prev, employeeId: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Ex: EMP-2024-001"
-                  />
-                </div>
-              </div>
-
+              {/* CHAMP RÔLE AVANT LA FONCTION */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Rôle *
@@ -663,6 +1254,62 @@ const UserManager: React.FC<UserManagerProps> = ({
                     </option>
                   ))}
                 </select>
+                {selectedRole && isSignatoryRole && (
+                  <p className="text-xs text-green-600 mt-1">
+                    ✅ Ce rôle a des permissions de signature
+                  </p>
+                )}
+              </div>
+
+              {/* CHAMP FONCTION CONDITIONNEL */}
+              {isSignatoryRole ? (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Fonction *
+                  </label>
+                  <select
+                    value={userFormData.profession}
+                    onChange={(e) => setUserFormData(prev => ({ ...prev, profession: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    required
+                  >
+                    <option value="">Sélectionner une fonction</option>
+                    {signatoryFunctions.map(func => (
+                      <option key={func} value={func}>
+                        {func}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Pour les rôles signataires, la fonction est obligatoire
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Fonction
+                  </label>
+                  <input
+                    type="text"
+                    value={userFormData.profession}
+                    onChange={(e) => setUserFormData(prev => ({ ...prev, profession: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Ex: Développeur"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Matricule employé
+                </label>
+                <input
+                  type="text"
+                  value={userFormData.employeeId}
+                  onChange={(e) => setUserFormData(prev => ({ ...prev, employeeId: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Ex: EMP-2024-001"
+                />
               </div>
 
               {!editingUser && (
@@ -740,15 +1387,13 @@ const UserManager: React.FC<UserManagerProps> = ({
         </div>
       )}
 
-      {/* Role Form Modal */}
       {showRoleForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-4xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
               {editingRole ? 'Modifier le rôle' : 'Nouveau rôle'}
             </h3>
-            
-            <form onSubmit={handleRoleSubmit} className="space-y-6">
+<form onSubmit={handleRoleSubmit} className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Target, Users, FileText, BarChart3, CreditCard, Banknote, ArrowRightLeft, DollarSign, Settings, LogOut, Menu, X } from 'lucide-react';
+import { Target, Users, FileText, BarChart3, CreditCard, Banknote, ArrowRightLeft, DollarSign, Settings, LogOut, Menu, X, AlertTriangle } from 'lucide-react';
 import { useAuth } from './hooks/useAuth';
 import { 
   grantsService, 
@@ -30,7 +30,9 @@ import Reports from './components/Reports';
 import UserManager from './components/UserManager';
 import UserProfile from './components/UserProfile';
 import GrantManager from './components/GrantManager';
+import GrantSelector from './components/GrantSelector';
 import LoginForm from './components/LoginForm';
+import { usePermissions } from './hooks/usePermissions';
 import { showSuccess, showError, showToast, showLoading, closeLoading } from './utils/alerts';
 import { 
   Grant, 
@@ -44,6 +46,13 @@ import {
   EmployeeLoan,
 } from './types';
 import { User, UserRole } from './types/user';
+// import { GlobalNotificationProvider, useGlobalNotifications } from './contexts/GlobalNotificationContext';
+import { useGlobalNotifications } from './contexts/GlobalNotificationContext';
+
+import { useEngagementNotifications } from './hooks/useEngagementNotifications';
+import { usePaymentNotifications } from './hooks/usePaymentNotifications';
+import { usePrefinancingNotifications } from './hooks/usePrefinancingNotifications';
+import { useEmployeeLoanNotifications } from './hooks/useEmployeeLoanNotifications';
 
 function App() {
   const { user, userProfile, userRole, loading: authLoading, signOut } = useAuth();
@@ -64,6 +73,45 @@ function App() {
   const [employeeLoans, setEmployeeLoans] = useState<EmployeeLoan[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<UserRole[]>([]);
+  const { hasModuleAccess } = usePermissions();
+
+  const { 
+    updateEngagementNotifications, 
+    updatePaymentNotifications,
+    updatePrefinancingNotifications,
+    updateEmployeeLoanNotifications,
+    totalNotifications,
+    hasAnyNotifications
+  } = useGlobalNotifications();
+
+  // Dans le composant App, ajoutez ce hook après les autres hooks
+  const { notificationCount, hasNotifications } = useEngagementNotifications(engagements);
+  const { notificationCount: engagementNotificationCount } = useEngagementNotifications(engagements);
+  const { notificationCount: paymentNotificationCount } = usePaymentNotifications(payments);
+  const { notificationCount: prefinancingNotificationCount } = usePrefinancingNotifications(prefinancings);
+  const { notificationCount: employeeLoanNotificationCount } = useEmployeeLoanNotifications(employeeLoans);
+
+   // Mettez à jour les notifications globales quand les counts changent
+  useEffect(() => {
+    updateEngagementNotifications(engagementNotificationCount);
+  }, [engagementNotificationCount, updateEngagementNotifications]);
+
+  useEffect(() => {
+    updatePaymentNotifications(paymentNotificationCount);
+  }, [paymentNotificationCount, updatePaymentNotifications]);
+
+  useEffect(() => {
+    updatePrefinancingNotifications(prefinancingNotificationCount);
+  }, [prefinancingNotificationCount, updatePrefinancingNotifications]);
+
+  useEffect(() => {
+    updateEmployeeLoanNotifications(employeeLoanNotificationCount);
+  }, [employeeLoanNotificationCount, updateEmployeeLoanNotifications]);
+  
+
+  const handleSelectGrant = (grantId: string) => {
+    setSelectedGrantId(grantId);
+  };
 
   const loadAllData = useCallback(async () => {
     try {
@@ -381,7 +429,7 @@ function App() {
     
     showSuccess('Subvention modifiée', 'Les modifications ont été enregistrées');
   } catch (error) {
-    showError('Erreur', 'Impossible de modifier la subvention');
+    console.error('Erreur', 'Impossible de modifier la subvention');
   }
 };
 
@@ -977,26 +1025,72 @@ function App() {
     );
   }
 
+  // Définition des items de menu
   const menuItems = [
-    { id: 'dashboard', label: 'Tableau de Bord', icon: BarChart3, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT'] },
-    { id: 'grants', label: 'Gestion des Subventions', icon: Banknote, roles: ['ADMIN', 'FINANCE_MANAGER'] },
-    { id: 'planning', label: 'Planification', icon: Target, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER'] },
-    { id: 'tracking', label: 'Suivi Budgétaire', icon: BarChart3, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
-    { id: 'engagements', label: 'Engagements', icon: FileText, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'READ_ONLY'] },
-    { id: 'payments', label: 'Paiements', icon: CreditCard, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'READ_ONLY'] },
-    { id: 'treasury', label: 'Trésorerie', icon: Banknote, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
-    { id: 'prefinancing', label: 'Préfinancements', icon: ArrowRightLeft, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
-    { id: 'employee-loans', label: 'Prêts Employés', icon: DollarSign, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
-    { id: 'reports', label: 'Rapports', icon: FileText, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
-    { id: 'config', label: 'Configuration', icon: Settings, roles: ['ADMIN'] },
-    { id: 'profile', label: 'Mon Profil', icon: Users, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
-    { id: 'users', label: 'Utilisateurs', icon: Users, roles: ['ADMIN'] },
-
+    { id: 'dashboard', label: 'Tableau de Bord', icon: BarChart3, module: 'dashboard' },
+    { id: 'grants', label: 'Gestion des Subventions', icon: Banknote, module: 'grants' },
+    { id: 'budget_planning', label: 'Planification', icon: Target, module: 'budget_planning' },
+    { id: 'tracking', label: 'Suivi Budgétaire', icon: BarChart3, module: 'tracking' },
+    {id: 'engagements', 
+      label: 'Engagements', 
+      icon: FileText, 
+      module: 'engagements',
+      notificationCount: engagementNotificationCount > 0 ? engagementNotificationCount : undefined
+    },
+    { 
+      id: 'payments', 
+      label: 'Paiements', 
+      icon: CreditCard, 
+      module: 'payments',
+      notificationCount: paymentNotificationCount > 0 ? paymentNotificationCount : undefined
+    },
+    { 
+      id: 'prefinancing', 
+      label: 'Préfinancements', 
+      icon: ArrowRightLeft, 
+      module: 'prefinancing',
+      notificationCount: prefinancingNotificationCount > 0 ? prefinancingNotificationCount : undefined
+    },
+    { 
+      id: 'employee-loans', 
+      label: 'Prêts Employés', 
+      icon: DollarSign, 
+      module: 'employee_loans',
+      notificationCount: employeeLoanNotificationCount > 0 ? employeeLoanNotificationCount : undefined
+    },
+    { id: 'treasury', label: 'Trésorerie', icon: Banknote, module: 'treasury' },
+    { id: 'reports', label: 'Rapports', icon: FileText, module: 'reports' },
+    { id: 'users', label: 'Utilisateurs', icon: Users, module: 'users' },
+    { id: 'globalConfig', label: 'Configuration', icon: Settings, module: 'globalConfig' },
+    { id: 'profile', label: 'Mon Profil', icon: Users, module: 'profile' }
   ];
 
+  // Filtrage basé sur les permissions réelles
   const availableMenuItems = menuItems.filter(item => 
-    userRole && item.roles.includes(userRole.code)
+    hasModuleAccess(item.module)
   );
+
+
+  // const menuItems = [
+  //   { id: 'dashboard', label: 'Tableau de Bord', icon: BarChart3, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT'] },
+  //   { id: 'grants', label: 'Gestion des Subventions', icon: Banknote, roles: ['ADMIN', 'FINANCE_MANAGER'] },
+  //   { id: 'planning', label: 'Planification', icon: Target, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER'] },
+  //   { id: 'tracking', label: 'Suivi Budgétaire', icon: BarChart3, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
+  //   { id: 'engagements', label: 'Engagements', icon: FileText, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'READ_ONLY'] },
+  //   { id: 'payments', label: 'Paiements', icon: CreditCard, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'READ_ONLY'] },
+  //   { id: 'treasury', label: 'Trésorerie', icon: Banknote, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
+  //   { id: 'prefinancing', label: 'Préfinancements', icon: ArrowRightLeft, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
+  //   { id: 'employee-loans', label: 'Prêts Employés', icon: DollarSign, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
+  //   { id: 'reports', label: 'Rapports', icon: FileText, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
+  //   { id: 'config', label: 'Configuration', icon: Settings, roles: ['ADMIN'] },
+  //   { id: 'profile', label: 'Mon Profil', icon: Users, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
+  //   { id: 'users', label: 'Utilisateurs', icon: Users, roles: ['ADMIN'] },
+
+  // ];
+
+  // const availableMenuItems = menuItems.filter(item => 
+  //   userRole && item.roles.includes(userRole.code)
+  // );
 
   if (!userProfile) {
   return (
@@ -1019,15 +1113,15 @@ function App() {
                 <div className="p-2 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl">
                   <Target className="w-6 h-6 text-white" />
                 </div>
-                <div className="p-2 bg-gradient-to-r  to-purple-600 rounded-xl">
-                <div className="relative w-20 h-15">
-                  <img
-                    src="/logo.png"
-                    alt="Logo"
-                    className="object-contain"
-                  />
+                <div className="p-2 bg-gradient-to-r to-purple-600 rounded-xl">
+                  <div className="relative w-20 h-15">
+                    <img
+                      src="/logo.png"
+                      alt="Logo"
+                      className="object-contain"
+                    />
+                  </div>
                 </div>
-              </div>
                 <div className="hidden sm:block">
                   <h1 className="text-xl font-bold text-gray-900">BudgetFlow</h1>
                   <p className="text-xs text-gray-500">Gestion Budgétaire</p>
@@ -1047,29 +1141,67 @@ function App() {
             </div>
 
             <div className="flex items-center space-x-4">
-              {/* Mobile menu button */}
-              <button
-                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                className="lg:hidden p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-              </button>
-              
-              {/* Desktop user info and logout */}
-              <div className="text-right">
-                <p className="text-sm font-medium text-gray-900">
-                  {userProfile.firstName} {userProfile.lastName}
-                </p>
-                <p className="text-xs text-gray-500">{userRole?.name}</p>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="hidden lg:block p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                title="Déconnexion"
-              >
-                <LogOut className="w-5 h-5" />
-              </button>
-            </div>
+  {/* Notification - Version desktop */}
+  <div className="hidden md:block">
+    {hasAnyNotifications && (
+      <div className="relative">
+        <div className="flex items-center space-x-2 bg-orange-50 border border-orange-200 rounded-full px-3 py-1">
+          <AlertTriangle className="w-4 h-4 text-orange-600" />
+          <span className="text-sm font-medium text-orange-800">
+            {totalNotifications} signature(s) en attente
+          </span>
+        </div>
+        <div className="absolute -top-1 -right-1">
+          <span className="flex h-3 w-3">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-3 w-3 bg-orange-500"></span>
+          </span>
+        </div>
+      </div>
+    )}
+  </div>
+
+  {/* Notification - Version mobile */}
+  <div className="md:hidden">
+    {hasAnyNotifications && (
+      <div className="relative">
+        <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+          <AlertTriangle className="w-5 h-5 text-orange-500" />
+          <span className="absolute -top-1 -right-1 flex h-4 w-4">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-4 w-4 bg-orange-500 text-xs text-white font-bold items-center justify-center">
+              {totalNotifications}
+            </span>
+          </span>
+        </button>
+      </div>
+    )}
+  </div>
+
+  {/* Mobile menu button */}
+  <button
+    onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+    className="lg:hidden p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+  >
+    {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+  </button>
+  
+  {/* Desktop user info and logout - Masqué sur mobile */}
+  <div className="hidden md:block text-right">
+    <p className="text-sm font-medium text-gray-900">
+      {userProfile.firstName} {userProfile.lastName}
+    </p>
+    <p className="text-xs text-gray-500">{userRole?.name}</p>
+  </div>
+  
+  <button
+    onClick={handleLogout}
+    className="hidden lg:block p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+    title="Déconnexion"
+  >
+    <LogOut className="w-5 h-5" />
+  </button>
+</div>
           </div>
         </div>
       </header>
@@ -1109,14 +1241,27 @@ function App() {
                         setActiveTab(item.id);
                         setIsMobileMenuOpen(false);
                       }}
-                      className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-left transition-all duration-200 ${
+                      className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-left transition-all duration-200 ${
                         activeTab === item.id
                           ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg'
                           : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                       }`}
                     >
-                      <Icon className="w-5 h-5" />
-                      <span className="font-medium">{item.label}</span>
+                      <div className="flex items-center space-x-3">
+                        <Icon className="w-5 h-5" />
+                        <span className="font-medium">{item.label}</span>
+                      </div>
+                      
+                      {/* Badge de notification */}
+                      {item.notificationCount && item.notificationCount > 0 && (
+                        <span className={`inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none rounded-full ${
+                          activeTab === item.id 
+                            ? 'bg-white text-purple-600' 
+                            : 'bg-orange-500 text-white'
+                        }`}>
+                          {item.notificationCount}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -1169,10 +1314,12 @@ function App() {
                 onDeleteGrant={handleDeleteGrant}
                 onUpdateBudgetLine={handleUpdateBudgetLine}
                 onUpdateSubBudgetLine={handleUpdateSubBudgetLine}
+
               />
             )}
+            
 
-            {activeTab === 'config' && (
+            {activeTab === 'globalConfig' && (
               <GrantSelector
                 grants={grants}
                 selectedGrantId={selectedGrantId}
@@ -1185,7 +1332,7 @@ function App() {
               <UserProfile />
             )}
 
-            {activeTab === 'planning' && (
+            {activeTab === 'budget_planning' && (
               <BudgetPlanning
                 budgetLines={filteredData.budgetLines}
                 subBudgetLines={filteredData.subBudgetLines}
@@ -1347,6 +1494,7 @@ function App() {
             setSelectedSubBudgetLine(null);
           }}
           onEditEngagement={handleEditEngagement}
+          currency={selectedGrant ? selectedGrant.currency : 'EUR'}
         />
       )}
     </div>
