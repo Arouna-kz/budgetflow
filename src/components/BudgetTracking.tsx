@@ -831,7 +831,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                       </th>
                       <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('spentRate')}>
                         <div className="flex items-center justify-center space-x-1">
-                          <span>Taux Dép.</span>
+                          <span>Taux Déc.</span>
                           <SortIcon field="spentRate" />
                         </div>
                       </th>

@@ -1063,7 +1063,7 @@ function App() {
             <Target className="w-8 h-8 text-white" />
           </div>
           <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Chargement de BudgetFlow...</p>
+          <p className="text-gray-600">Chargement de BudgetBASE...</p>
           <p className="text-xs text-gray-500 mt-2">Vérification de l'authentification...</p>
         </div>
       </div>
@@ -1181,7 +1181,7 @@ function App() {
                   </div>
                 </div>
                 <div className="hidden sm:block">
-                  <h1 className="text-xl font-bold text-gray-900">BudgetFlow</h1>
+                  <h1 className="text-xl font-bold text-gray-900">BudgetBASE</h1>
                   <p className="text-xs text-gray-500">Gestion Budgétaire</p>
                 </div>
               </div>
@@ -1199,67 +1199,68 @@ function App() {
             </div>
 
             <div className="flex items-center space-x-4">
-  {/* Notification - Version desktop */}
-  <div className="hidden md:block">
-    {hasAnyNotifications && (
-      <div className="relative">
-        <div className="flex items-center space-x-2 bg-orange-50 border border-orange-200 rounded-full px-3 py-1">
-          <AlertTriangle className="w-4 h-4 text-orange-600" />
-          <span className="text-sm font-medium text-orange-800">
-            {totalNotifications} signature(s) en attente
-          </span>
-        </div>
-        <div className="absolute -top-1 -right-1">
-          <span className="flex h-3 w-3">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-orange-500"></span>
-          </span>
-        </div>
-      </div>
-    )}
-  </div>
+              {/* Notification - Version desktop */}
+              <div className="hidden md:block">
+                {hasAnyNotifications && (
+                  <div className="relative">
+                    <div className="flex items-center space-x-2 bg-orange-50 border border-orange-200 rounded-full px-3 py-1">
+                      <AlertTriangle className="w-4 h-4 text-orange-600" />
+                      <span className="text-sm font-medium text-orange-800">
+                        {totalNotifications} signature(s) en attente
+                      </span>
+                      
+                    </div>
+                    <div className="absolute -top-1 -right-1">
+                      <span className="flex h-3 w-3">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-3 w-3 bg-orange-500"></span>
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
 
-  {/* Notification - Version mobile */}
-  <div className="md:hidden">
-    {hasAnyNotifications && (
-      <div className="relative">
-        <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
-          <AlertTriangle className="w-5 h-5 text-orange-500" />
-          <span className="absolute -top-1 -right-1 flex h-4 w-4">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-4 w-4 bg-orange-500 text-xs text-white font-bold items-center justify-center">
-              {totalNotifications}
-            </span>
-          </span>
-        </button>
-      </div>
-    )}
-  </div>
+              {/* Notification - Version mobile */}
+              <div className="md:hidden">
+                {hasAnyNotifications && (
+                  <div className="relative">
+                    <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                      <AlertTriangle className="w-5 h-5 text-orange-500" />
+                      <span className="absolute -top-1 -right-1 flex h-4 w-4">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-4 w-4 bg-orange-500 text-xs text-white font-bold items-center justify-center">
+                          {totalNotifications}
+                        </span>
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
 
-  {/* Mobile menu button */}
-  <button
-    onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-    className="lg:hidden p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-  >
-    {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-  </button>
-  
-  {/* Desktop user info and logout - Masqué sur mobile */}
-  <div className="hidden md:block text-right">
-    <p className="text-sm font-medium text-gray-900">
-      {userProfile.firstName} {userProfile.lastName}
-    </p>
-    <p className="text-xs text-gray-500">{userRole?.name}</p>
-  </div>
-  
-  <button
-    onClick={handleLogout}
-    className="hidden lg:block p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-    title="Déconnexion"
-  >
-    <LogOut className="w-5 h-5" />
-  </button>
-</div>
+              {/* Mobile menu button */}
+              <button
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                className="lg:hidden p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+              </button>
+              
+              {/* Desktop user info and logout - Masqué sur mobile */}
+              <div className="hidden md:block text-right">
+                <p className="text-sm font-medium text-gray-900">
+                  {userProfile.firstName} {userProfile.lastName}
+                </p>
+                <p className="text-xs text-gray-500">{userRole?.name}</p>
+              </div>
+              
+              <button
+                onClick={handleLogout}
+                className="hidden lg:block p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                title="Déconnexion"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -1276,7 +1277,7 @@ function App() {
                     <Target className="w-6 h-6 text-white" />
                   </div>
                   <div>
-                    <h1 className="text-lg font-bold text-gray-900">BudgetFlow</h1>
+                    <h1 className="text-lg font-bold text-gray-900">BudgetBASE</h1>
                     <p className="text-xs text-gray-500">Gestion Budgétaire</p>
                   </div>
                 </div>
