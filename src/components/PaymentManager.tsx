@@ -1,7 +1,7 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Edit, CreditCard, CheckCircle, Clock, AlertCircle, Eye, Filter, TrendingUp, User, X, ChevronUp, ChevronDown, ChevronRight, ChevronLeft, Search, Download } from 'lucide-react';
 import { showWarning, showSuccess, showValidationError } from '../utils/alerts';
-import { Payment, Engagement, BudgetLine, Grant, BankAccount, PAYMENT_STATUS } from '../types';
+import { Payment, Engagement, BudgetLine, SubBudgetLine, Grant, BankAccount, PAYMENT_STATUS } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 import { useAuth } from '../hooks/useAuth';
 import html2canvas from 'html2canvas';
@@ -19,6 +19,7 @@ interface PaymentManagerProps {
   onAddPayment: (payment: Omit<Payment, 'id'>) => void;
   onUpdatePayment: (id: string, updates: Partial<Payment>) => void;
   onViewPaymentDetails: (paymentId: string) => void;
+  onEditPayment: (paymentId: string) => void;
   onCreatePaymentFromEngagement: (engagementId: string) => void;
 }
 
@@ -31,9 +32,24 @@ interface PaymentApprovalSignature {
 }
 
 interface PaymentApprovals {
-  supervisor1?: { name: string; signature: boolean; observation: string };
-  supervisor2?: { name: string; signature: boolean; observation: string };
-  finalApproval?: { name: string; signature: boolean; observation: string };
+  supervisor1?: { 
+    name: string; 
+    signature: boolean; 
+    observation: string;
+    date?: string;
+  };
+  supervisor2?: { 
+    name: string; 
+    signature: boolean; 
+    observation: string;
+    date?: string;
+  };
+  finalApproval?: { 
+    name: string; 
+    signature: boolean; 
+    observation: string;
+    date?: string;
+  };
 }
 
 const PaymentManager: React.FC<PaymentManagerProps> = ({
@@ -47,6 +63,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   onAddPayment,
   onUpdatePayment,
   onViewPaymentDetails,
+  onEditPayment,
   onCreatePaymentFromEngagement
 }) => {
   // HOOKS D'AUTHENTIFICATION ET PERMISSIONS
@@ -433,9 +450,9 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
             Signatures d'Approbation du Paiement
           </h3>
           <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
-            <!-- Coordinateur de la subvention -->
+            <!-- Coordinateur de la Subvention -->
             <div style="border: 1px solid #ddd; border-radius: 8px; padding: 20px; text-align: center;">
-              <h4 style="font-size: 14px; color: #555; margin-bottom: 15px; font-weight: bold;">Coordinateur de la subvention</h4>
+              <h4 style="font-size: 14px; color: #555; margin-bottom: 15px; font-weight: bold;">Coordinateur de la Subvention</h4>
               <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
               <div style="min-height: 40px; margin-bottom: 10px; font-weight: bold;">
                 ${currentApprovals.supervisor1?.name || '_________________________'}
@@ -525,7 +542,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
 
   // Vérifie si l'utilisateur peut voir la section signature
   const canViewSignatureSection = (): boolean => {
-    const signatureProfessions = ['Coordinateur de la subvention', 'Comptable', 'Coordonnateur National'];
+    const signatureProfessions = ['Coordinateur de la Subvention', 'Comptable', 'Coordonnateur National'];
     return signatureProfessions.includes(getUserProfession());
   };
   
@@ -541,10 +558,6 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
 
   // Vérifie si l'utilisateur peut signer un paiement spécifique
   const canSignPayment = (payment: Payment | null, signatureType: string): boolean => {
-    if (!payment && signatureType === 'finalApproval') {
-      return false; // Le coordonnateur national ne peut pas signer un nouveau paiement
-    }
-    
     const currentApprovals = payment ? payment.approvals : approvals;
     
     if (!currentApprovals) {
@@ -555,7 +568,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     
     // Vérification basée sur la profession et le type de signature
     const professionCanSign = 
-      (signatureType === 'supervisor1' && userProfession === 'Coordinateur de la subvention') ||
+      (signatureType === 'supervisor1' && userProfession === 'Coordinateur de la Subvention') ||
       (signatureType === 'supervisor2' && userProfession === 'Comptable') ||
       (signatureType === 'finalApproval' && userProfession === 'Coordonnateur National');
 
@@ -566,9 +579,11 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     if (existingApproval?.signature) return false;
 
     // Pour le coordonnateur national, vérifier que les deux premiers ont signé
-    if (signatureType === 'finalApproval' && payment) {
+    if (signatureType === 'finalApproval') {
       const hasSupervisor1Signed = currentApprovals.supervisor1?.signature;
       const hasSupervisor2Signed = currentApprovals.supervisor2?.signature;
+      
+      if (!payment) return false; // Le CN ne peut signer que les paiements existants
       
       if (!hasSupervisor1Signed || !hasSupervisor2Signed) {
         return false;
@@ -583,7 +598,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     const userProfession = getUserProfession();
     
     return payments.filter(payment => {
-      if (userProfession === 'Coordinateur de la subvention') {
+      if (userProfession === 'Coordinateur de la Subvention') {
         return !payment.approvals?.supervisor1?.signature;
       } else if (userProfession === 'Comptable') {
         return !payment.approvals?.supervisor2?.signature;
@@ -625,7 +640,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
         const newApprovals = { ...prev };
         const userProfession = getUserProfession();
         
-        if (userProfession === 'Coordinateur de la subvention') {
+        if (userProfession === 'Coordinateur de la Subvention') {
           newApprovals.supervisor1 = { 
             ...newApprovals.supervisor1, 
             name: userName 
@@ -766,86 +781,44 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     if (sortField !== field) return null;
     return sortDirection === 'asc' ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />;
   };
+   
 
   // 🚨 GESTIONNAIRES D'ÉVÉNEMENTS
 
   // Fonction pour signer un paiement
-  const handleSignPayment = (payment: Payment | null, signatureType: string) => {
-    if (!canSignPayment(payment, signatureType)) {
-      if (signatureType === 'finalApproval' && !payment) {
-        showWarning('Signature impossible', 'Le Coordonnateur National ne peut pas signer un nouveau paiement lors de sa création');
-      } else if (signatureType === 'finalApproval' && payment) {
-        showWarning('Signature impossible', 'Les signatures du Coordinateur de la subvention et du Comptable sont requises avant votre signature');
-      } else {
-        showWarning('Permission refusée', 'Vous ne pouvez pas signer ce paiement');
+  const handleSignPayment = (payment: Payment, signatureType: string) => {
+      if (!canSignPayment(payment, signatureType)) {
+          if (signatureType === 'finalApproval') {
+              showWarning('Signature impossible', 'Les signatures du Coordinateur de la Subvention et du Comptable sont requises avant la vôtre.');
+          } else {
+              showWarning('Permission refusée', 'Vous n\'avez pas les droits pour apposer cette signature.');
+          }
+          return;
       }
-      return;
-    }
 
-    if (payment) {
-      // Cas d'un paiement existant (édition)
-      const updates: Partial<Payment> = {
-        approvals: { ...payment.approvals }
+      // Préparer les données de la nouvelle signature
+      const signatureData = {
+          name: getUserFullName(),
+          date: new Date().toISOString().split('T')[0],
+          signature: true,
+          observation: '', // L'observation doit être ajoutée via le formulaire de modification complet
       };
 
-      if (signatureType === 'supervisor1') {
-        updates.approvals = {
-          ...updates.approvals,
-          supervisor1: {
-            name: userFullName,
-            date: new Date().toISOString().split('T')[0],
-            signature: true,
-            observation: approvals.supervisor1?.observation || ''
+      // Créer l'objet de mise à jour partiel
+      const updates: Partial<Payment> = {
+          approvals: {
+              ...payment.approvals,
+              [signatureType]: signatureData,
           }
-        };
-      } else if (signatureType === 'supervisor2') {
-        updates.approvals = {
-          ...updates.approvals,
-          supervisor2: {
-            name: userFullName,
-            date: new Date().toISOString().split('T')[0],
-            signature: true,
-            observation: approvals.supervisor2?.observation || ''
-          }
-        };
-      } else if (signatureType === 'finalApproval') {
-        updates.approvals = {
-          ...updates.approvals,
-          finalApproval: {
-            name: userFullName,
-            date: new Date().toISOString().split('T')[0],
-            signature: true,
-            observation: approvals.finalApproval?.observation || ''
-          }
-        };
+      };
+
+      // Mettre à jour le statut si le Coordonnateur National signe
+      if (signatureType === 'finalApproval') {
+          updates.status = 'approved';
       }
 
       onUpdatePayment(payment.id, updates);
-      showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès');
-    } else {
-      // Cas d'un nouveau paiement (création) - seulement pour coordinateur et comptable
-      if (signatureType !== 'finalApproval') {
-        const updatedApproval = {
-          name: userFullName,
-          date: new Date().toISOString().split('T')[0],
-          signature: true,
-          observation: approvals[signatureType as keyof typeof approvals]?.observation || ''
-        };
-
-        setApprovals(prev => ({
-          ...prev,
-          [signatureType]: updatedApproval
-        }));
-        
-        showSuccess('Signature préparée', 'Votre signature sera enregistrée avec le nouveau paiement');
-      }
-    }
-    
-    // Réinitialiser les observations après signature
-    setApprovals(prev => ({
-      ...prev,
-      [signatureType]: { ...prev[signatureType as keyof typeof approvals], observation: '' }
-    }));
+      showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès.');
   };
 
   // Réinitialisation du formulaire - CORRIGÉE
@@ -880,105 +853,6 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     setEditingPayment(null);
   };
 
-
-  // Soumission du formulaire
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!canCreate && !editingPayment) {
-      showWarning('Permission refusée', 'Vous n\'avez pas la permission de créer des paiements');
-      return;
-    }
-
-    if (!canEdit && editingPayment) {
-      showWarning('Permission refusée', 'Vous n\'avez pas la permission de modifier des paiements');
-      return;
-    }
-    
-    // Validation des champs obligatoires
-    if (!formData.engagementId || !formData.amount || !formData.description || !formData.supplier) {
-      showValidationError('Champs obligatoires manquants', 'Veuillez remplir tous les champs obligatoires');
-      return;
-    }
-
-    // Préparation des données d'approbation
-    const approvalData: any = {};
-    
-    if (approvals.financialController.name) {
-      approvalData.financialController = {
-        name: approvals.financialController.name,
-        date: new Date().toISOString().split('T')[0],
-        signature: approvals.financialController.signature,
-        observation: approvals.financialController.observation
-      };
-    }
-    
-    if (approvals.accountingManager.name) {
-      approvalData.accountingManager = {
-        name: approvals.accountingManager.name,
-        date: new Date().toISOString().split('T')[0],
-        signature: approvals.accountingManager.signature,
-        observation: approvals.accountingManager.observation
-      };
-    }
-    
-    if (approvals.nationalCoordinator.name && approvals.nationalCoordinator.signature) {
-      approvalData.nationalCoordinator = {
-        name: approvals.nationalCoordinator.name,
-        date: new Date().toISOString().split('T')[0],
-        signature: approvals.nationalCoordinator.signature,
-        observation: approvals.nationalCoordinator.observation
-      };
-    }
-
-    if (editingPayment) {
-      // Modification d'un paiement existant
-      onUpdatePayment(editingPayment.id, {
-        engagementId: formData.engagementId,
-        grantId: formData.grantId,
-        budgetLineId: formData.budgetLineId,
-        subBudgetLineId: formData.subBudgetLineId,
-        paymentNumber: formData.paymentNumber,
-        amount: parseFloat(formData.amount),
-        description: formData.description,
-        supplier: formData.supplier,
-        paymentMethod: formData.paymentMethod,
-        checkNumber: formData.checkNumber,
-        bankAccountId: formData.bankAccountId,
-        date: formData.date,
-        status: formData.status,
-        approvals: approvalData
-      });
-      showSuccess('Paiement modifié', 'Le paiement a été modifié avec succès');
-    } else {
-      // Création d'un nouveau paiement
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const timestamp = String(Date.now()).slice(-6);
-      const paymentNumber = `PAY-${year}-${month}-${timestamp}`;
-      
-      onAddPayment({
-        engagementId: formData.engagementId,
-        grantId: formData.grantId,
-        budgetLineId: formData.budgetLineId,
-        subBudgetLineId: formData.subBudgetLineId,
-        paymentNumber: paymentNumber,
-        amount: parseFloat(formData.amount),
-        description: formData.description,
-        supplier: formData.supplier,
-        paymentMethod: formData.paymentMethod,
-        checkNumber: formData.checkNumber,
-        bankAccountId: formData.bankAccountId,
-        date: formData.date,
-        status: formData.status,
-        approvals: approvalData
-      });
-      showSuccess('Paiement créé', 'Le paiement a été créé avec succès');
-    }
-
-    resetForm();
-  };
 
   const getCurrencySymbol = (currency: Grant['currency']) => {
     switch (currency) {
@@ -1030,7 +904,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   const isSignatureRequired = (payment: Payment, signatureType: string): boolean => {
     const userProfession = getUserProfession();
     
-    if (signatureType === 'supervisor1' && userProfession === 'Coordinateur de la subvention') {
+    if (signatureType === 'supervisor1' && userProfession === 'Coordinateur de la Subvention') {
       return !payment.approvals?.supervisor1?.signature;
     } else if (signatureType === 'supervisor2' && userProfession === 'Comptable') {
       return !payment.approvals?.supervisor2?.signature;
@@ -1088,177 +962,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     );
   }
 
-  // Rendu des champs du formulaire de paiement
-  const renderPaymentFormFields = () => (
-    <>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Engagement *
-          </label>
-          <select
-            value={formData.engagementId}
-            onChange={(e) => {
-              const engagement = getEngagement(e.target.value);
-              if (engagement) {
-                setFormData(prev => ({ 
-                  ...prev, 
-                  engagementId: e.target.value,
-                  grantId: engagement.grantId,
-                  budgetLineId: engagement.budgetLineId,
-                  subBudgetLineId: engagement.subBudgetLineId,
-                  supplier: engagement.supplier || '',
-                  amount: engagement.amount.toString()
-                }));
-              }
-            }}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            required
-            disabled={!!editingPayment}
-          >
-            <option value="">Sélectionner un engagement</option>
-            {availableEngagements.map(engagement => (
-              <option key={engagement.id} value={engagement.id}>
-                {engagement.engagementNumber} - {engagement.supplier} - {formatCurrency(engagement.amount)}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Date *
-          </label>
-          <input
-            type="date"
-            value={formData.date}
-            onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            required
-          />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Montant ({getCurrencySymbol(activeGrant?.currency || 'EUR')}) *
-          </label>
-          <div className="relative">
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              value={formData.amount}
-              onChange={(e) => setFormData(prev => ({ ...prev, amount: e.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8"
-              placeholder="0.00"
-              required
-              disabled={!!formData.engagementId}
-            />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Fournisseur *
-          </label>
-          <input
-            type="text"
-            value={formData.supplier}
-            onChange={(e) => setFormData(prev => ({ ...prev, supplier: e.target.value }))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            placeholder="Nom du fournisseur"
-            required
-            disabled={!!formData.engagementId}
-          />
-        </div>
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          Description *
-        </label>
-        <textarea
-          value={formData.description}
-          onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          rows={3}
-          placeholder="Description du paiement..."
-          required
-        />
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Mode de paiement
-          </label>
-          <select
-            value={formData.paymentMethod}
-            onChange={(e) => setFormData(prev => ({ ...prev, paymentMethod: e.target.value as Payment['paymentMethod'] }))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="transfer">Virement</option>
-            <option value="check">Chèque</option>
-            <option value="cash">Espèces</option>
-          </select>
-        </div>
-
-        {formData.paymentMethod === 'check' && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Numéro de chèque
-            </label>
-            <input
-              type="text"
-              value={formData.checkNumber}
-              onChange={(e) => setFormData(prev => ({ ...prev, checkNumber: e.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="N° de chèque"
-            />
-          </div>
-        )}
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Compte bancaire
-          </label>
-          <select
-            value={formData.bankAccountId}
-            onChange={(e) => setFormData(prev => ({ ...prev, bankAccountId: e.target.value }))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="">Sélectionner un compte</option>
-            {bankAccounts.map(account => (
-              <option key={account.id} value={account.id}>
-                {account.accountNumber} - {account.bankName}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-      
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          Statut
-        </label>
-        <select
-          value={formData.status}
-          onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Payment['status'] }))}
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        >
-          <option value="pending">En attente</option>
-          {userProfession === "Coordonnateur National" && (
-            <>
-              <option value="approved">Approuvé</option>
-              <option value="rejected">Rejeté</option>
-            </>
-          )}
-        </select>
-      </div>
-    </>
-  );
+  
 
   // 🎯 RENDU PRINCIPAL
   return (
@@ -1456,275 +1160,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
         </div>
       </div>
 
-      {/* Modal du formulaire de paiement */}
-      {showForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-4xl w-full p-8 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-blue-100 rounded-lg">
-                  <CreditCard className="w-6 h-6 text-blue-600" />
-                </div>
-                <div>
-                  <h2 className="text-2xl font-bold text-gray-900">
-                    {editingPayment ? 'Modifier le paiement' : 'Nouveau paiement'}
-                  </h2>
-                </div>
-              </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => exportPaymentForm(editingPayment)}
-                  disabled={isGeneratingPDF}
-                  className="p-2 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors disabled:opacity-50"
-                  title="Télécharger le formulaire"
-                >
-                  <Download className="w-5 h-5" />
-                </button>
-                <button
-                  onClick={resetForm}
-                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
-                >
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-            </div>
-            
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Champs du formulaire */}
-              {renderPaymentFormFields()}
-
-              {/* Section Signatures - Affichée seulement pour les rôles autorisés */}
-              {canViewSignatureSection() && (
-                <div className="bg-yellow-50 rounded-xl p-6 border border-yellow-200">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                    <User className="w-5 h-5 mr-2" />
-                    Signatures d'Approbation
-                  </h3>
-                  
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    {/* Coordinateur de la subvention */}
-                    <div className="bg-white rounded-lg p-4 border border-gray-200">
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="font-medium text-gray-800">Coordinateur de la subvention</h4>
-                        {canSignPayment(editingPayment, 'supervisor1') && (
-                          <button
-                            type="button"
-                            onClick={() => handleSignPayment(editingPayment, 'supervisor1')}
-                            className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
-                          >
-                            Signer
-                          </button>
-                        )}
-                      </div>
-                      <input
-                        type="text"
-                        value={userProfession === 'Coordinateur de la subvention' && !approvals.supervisor1?.name ? userFullName : approvals.supervisor1?.name || ''}
-                        onChange={(e) => setApprovals(prev => ({
-                          ...prev,
-                          supervisor1: { ...prev.supervisor1, name: e.target.value }
-                        }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                        disabled
-                      />
-                      
-                      <div className="flex items-center justify-between">
-                        <label className="flex items-center space-x-2">
-                          <input
-                            type="checkbox"
-                            checked={approvals.supervisor1?.signature || false}
-                            onChange={(e) => setApprovals(prev => ({
-                              ...prev,
-                              supervisor1: { ...prev.supervisor1, signature: e.target.checked }
-                            }))}
-                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            disabled={userProfession !== 'Coordinateur de la subvention' || !!approvals.supervisor1?.name}
-                          />
-                          <span className="text-sm text-gray-700">Signature validée</span>
-                        </label>
-                        
-                        <button
-                          type="button"
-                          onClick={() => toggleObservation('supervisor1')}
-                          className="text-blue-600 text-sm hover:text-blue-800 flex items-center space-x-1"
-                        >
-                          <span>Observation</span>
-                          {showObservations.supervisor1 ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                        </button>
-                      </div>
-                      
-                      {showObservations.supervisor1 && (
-                        <div className="mt-3">
-                          <textarea
-                            value={approvals.supervisor1?.observation || ''}
-                            onChange={(e) => setApprovals(prev => ({
-                              ...prev,
-                              supervisor1: { ...prev.supervisor1, observation: e.target.value }
-                            }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            rows={3}
-                            placeholder="Saisissez votre observation..."
-                            disabled={userProfession !== 'Coordinateur de la subvention' || !!approvals.supervisor1?.name}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Comptable */}
-                    <div className="bg-white rounded-lg p-4 border border-gray-200">
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="font-medium text-gray-800">Comptable</h4>
-                        {canSignPayment(editingPayment, 'supervisor2') && (
-                          <button
-                            type="button"
-                            onClick={() => handleSignPayment(editingPayment, 'supervisor2')}
-                            className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
-                          >
-                            Signer
-                          </button>
-                        )}
-                      </div>
-                      <input
-                        type="text"
-                        value={userProfession === 'Comptable' && !approvals.supervisor2?.name ? userFullName : approvals.supervisor2?.name || ''}
-                        onChange={(e) => setApprovals(prev => ({
-                          ...prev,
-                          supervisor2: { ...prev.supervisor2, name: e.target.value }
-                        }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                        disabled
-                      />
-                      
-                      <div className="flex items-center justify-between">
-                        <label className="flex items-center space-x-2">
-                          <input
-                            type="checkbox"
-                            checked={approvals.supervisor2?.signature || false}
-                            onChange={(e) => setApprovals(prev => ({
-                              ...prev,
-                              supervisor2: { ...prev.supervisor2, signature: e.target.checked }
-                            }))}
-                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            disabled={userProfession !== 'Comptable' || !!approvals.supervisor2?.name}
-                          />
-                          <span className="text-sm text-gray-700">Signature validée</span>
-                        </label>
-                        
-                        <button
-                          type="button"
-                          onClick={() => toggleObservation('supervisor2')}
-                          className="text-blue-600 text-sm hover:text-blue-800 flex items-center space-x-1"
-                        >
-                          <span>Observation</span>
-                          {showObservations.supervisor2 ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                        </button>
-                      </div>
-                      
-                      {showObservations.supervisor2 && (
-                        <div className="mt-3">
-                          <textarea
-                            value={approvals.supervisor2?.observation || ''}
-                            onChange={(e) => setApprovals(prev => ({
-                              ...prev,
-                              supervisor2: { ...prev.supervisor2, observation: e.target.value }
-                            }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            rows={3}
-                            placeholder="Saisissez votre observation..."
-                            disabled={userProfession !== 'Comptable' || !!approvals.supervisor2?.name}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Coordonnateur National */}
-                    <div className="bg-white rounded-lg p-4 border border-gray-200">
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="font-medium text-gray-800">Coordonnateur National</h4>
-                        {canSignPayment(editingPayment, 'finalApproval') && (
-                          <button
-                            type="button"
-                            onClick={() => handleSignPayment(editingPayment, 'finalApproval')}
-                            className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
-                          >
-                            Signer
-                          </button>
-                        )}
-                      </div>
-                      <input
-                        type="text"
-                        value={userProfession === 'Coordonnateur National' && !approvals.finalApproval?.name ? userFullName : approvals.finalApproval?.name || ''}
-                        onChange={(e) => setApprovals(prev => ({
-                          ...prev,
-                          finalApproval: { ...prev.finalApproval, name: e.target.value }
-                        }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                        disabled
-                      />
-                      
-                      <div className="flex items-center justify-between">
-                        <label className="flex items-center space-x-2">
-                          <input
-                            type="checkbox"
-                            checked={approvals.finalApproval?.signature || false}
-                            onChange={(e) => setApprovals(prev => ({
-                              ...prev,
-                              finalApproval: { ...prev.finalApproval, signature: e.target.checked }
-                            }))}
-                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            disabled={userProfession !== 'Coordonnateur National' || !!approvals.finalApproval?.name}
-                          />
-                          <span className="text-sm text-gray-700">Signature validée</span>
-                        </label>
-                        
-                        <button
-                          type="button"
-                          onClick={() => toggleObservation('finalApproval')}
-                          className="text-blue-600 text-sm hover:text-blue-800 flex items-center space-x-1"
-                        >
-                          <span>Observation</span>
-                          {showObservations.finalApproval ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                        </button>
-                      </div>
-                      
-                      {showObservations.finalApproval && (
-                        <div className="mt-3">
-                          <textarea
-                            value={approvals.finalApproval?.observation || ''}
-                            onChange={(e) => setApprovals(prev => ({
-                              ...prev,
-                              finalApproval: { ...prev.finalApproval, observation: e.target.value }
-                            }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            rows={3}
-                            placeholder="Saisissez votre observation..."
-                            disabled={userProfession !== 'Coordonnateur National' || !!approvals.finalApproval?.name}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex space-x-3 pt-4">
-                <button
-                  type="button"
-                  onClick={resetForm}
-                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors"
-                >
-                  {editingPayment ? 'Modifier' : 'Ajouter'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      
 
       {/* Quick Access to Create Payments */}
       {filteredAvailableEngagements.length > 0 && canCreate && (
@@ -1941,71 +1377,89 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                           </td>
                           <td className="px-6 py-4 text-center">
                             <div className="flex items-center justify-center space-x-2">
-                              {/* Signature Coordinateur de la subvention */}
+                              {/* Signature Coordinateur de la Subvention */}
                               <div className="relative group">
-                                {getSignatureIcon(payment, 'financialController')}
-                                {isSignatureRequired(payment, 'financialController') && (
+                                {getSignatureIcon(payment, 'supervisor1')}
+                                {isSignatureRequired(payment, 'supervisor1') && (
                                   <div className="absolute -top-1 -right-1">
                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
                                   </div>
                                 )}
                                 <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap z-10">
-                                  Coordinateur de la subvention
-                                  {payment.approvals?.financialController?.name && (
-                                    <div className="font-medium">
-                                      {payment.approvals.financialController.name}
+                                  Coordinateur de la Subvention
+                                  {payment.approvals?.supervisor1?.name && (
+                                    <div className="font-medium">{payment.approvals.supervisor1.name}</div>
+                                  )}
+                                  {payment.approvals?.supervisor1?.date && (
+                                    <div className="text-gray-300">
+                                      {new Date(payment.approvals.supervisor1.date).toLocaleDateString('fr-FR')}
                                     </div>
                                   )}
-                                  {payment.approvals?.financialController?.date && (
-                                    <div className="text-gray-300">
-                                      {new Date(payment.approvals.financialController.date).toLocaleDateString('fr-FR')}
-                                    </div>
+                                  {canSignPayment(payment, 'supervisor1') && (
+                                    <button
+                                      onClick={() => handleSignPayment(payment, 'supervisor1')}
+                                      className="mt-1 bg-green-600 text-white px-2 py-1 rounded text-xs hover:bg-green-700"
+                                    >
+                                      Signer
+                                    </button>
                                   )}
                                 </div>
                               </div>
 
                               {/* Signature Comptable */}
                               <div className="relative group">
-                                {getSignatureIcon(payment, 'accountingManager')}
-                                {isSignatureRequired(payment, 'accountingManager') && (
+                                {getSignatureIcon(payment, 'supervisor2')}
+                                {isSignatureRequired(payment, 'supervisor2') && (
                                   <div className="absolute -top-1 -right-1">
                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
                                   </div>
                                 )}
                                 <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap z-10">
                                   Comptable
-                                  {payment.approvals?.accountingManager?.name && (
-                                    <div className="font-medium">
-                                      {payment.approvals.accountingManager.name}
+                                  {payment.approvals?.supervisor2?.name && (
+                                    <div className="font-medium">{payment.approvals.supervisor2.name}</div>
+                                  )}
+                                  {payment.approvals?.supervisor2?.date && (
+                                    <div className="text-gray-300">
+                                      {new Date(payment.approvals.supervisor2.date).toLocaleDateString('fr-FR')}
                                     </div>
                                   )}
-                                  {payment.approvals?.accountingManager?.date && (
-                                    <div className="text-gray-300">
-                                      {new Date(payment.approvals.accountingManager.date).toLocaleDateString('fr-FR')}
-                                    </div>
+                                  {canSignPayment(payment, 'supervisor2') && (
+                                    <button
+                                      onClick={() => handleSignPayment(payment, 'supervisor2')}
+                                      className="mt-1 bg-green-600 text-white px-2 py-1 rounded text-xs hover:bg-green-700"
+                                    >
+                                      Signer
+                                    </button>
                                   )}
                                 </div>
                               </div>
 
                               {/* Signature Coordonnateur National */}
                               <div className="relative group">
-                                {getSignatureIcon(payment, 'nationalCoordinator')}
-                                {isSignatureRequired(payment, 'nationalCoordinator') && (
+                                {getSignatureIcon(payment, 'finalApproval')}
+                                {isSignatureRequired(payment, 'finalApproval') && (
                                   <div className="absolute -top-1 -right-1">
                                     <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
                                   </div>
                                 )}
                                 <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap z-10">
                                   Coordonnateur National
-                                  {payment.approvals?.nationalCoordinator?.name && (
-                                    <div className="font-medium">
-                                      {payment.approvals.nationalCoordinator.name}
+                                  {payment.approvals?.finalApproval?.name && (
+                                    <div className="font-medium">{payment.approvals.finalApproval.name}</div>
+                                  )}
+                                  {payment.approvals?.finalApproval?.date && (
+                                    <div className="text-gray-300">
+                                      {new Date(payment.approvals.finalApproval.date).toLocaleDateString('fr-FR')}
                                     </div>
                                   )}
-                                  {payment.approvals?.nationalCoordinator?.date && (
-                                    <div className="text-gray-300">
-                                      {new Date(payment.approvals.nationalCoordinator.date).toLocaleDateString('fr-FR')}
-                                    </div>
+                                  {canSignPayment(payment, 'finalApproval') && (
+                                    <button
+                                      onClick={() => handleSignPayment(payment, 'finalApproval')}
+                                      className="mt-1 bg-green-600 text-white px-2 py-1 rounded text-xs hover:bg-green-700"
+                                    >
+                                      Signer
+                                    </button>
                                   )}
                                 </div>
                               </div>
@@ -2044,10 +1498,21 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                           </td>
                           <td className="px-6 py-4 text-center">
                             <div className="flex items-center justify-center space-x-2">
+                              {canEdit && (
+                                <button
+                                  onClick={() => onEditPayment(payment.id)}
+                                  className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                                  title="Modifier le paiement"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </button>
+                              )}
+
                               {canView && (
                                 <button
                                   onClick={() => onViewPaymentDetails(payment.id)}
                                   className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                  title="Voir les détails"
                                 >
                                   <Eye className="w-4 h-4" />
                                 </button>

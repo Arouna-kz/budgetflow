@@ -66,7 +66,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     expectedRepaymentDate: '',
     purpose: 'specific_expenses' as Prefinancing['purpose'],
     targetBankAccount: '',
-    targetGrant: ''
+    targetGrant: '',
+    status: 'pending' as Prefinancing['status']
   });
 
   const [repaymentData, setRepaymentData] = useState({
@@ -92,6 +93,15 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
   });
 
   // FONCTIONS UTILITAIRES POUR LES RÔLES ET SIGNATURES
+  // Vérifie si l'utilisateur peut modifier le statut
+  const canModifyStatusComptable = (): boolean => {
+    return getUserProfession() === 'Comptable';
+  };
+
+  const canModifyStatus = (): boolean => {
+    return getUserProfession() === 'Coordonnateur National';
+  };
+  
   const getUserFullName = (): string => {
     if (!userProfile) return '';
     if (userProfile.firstName && userProfile.lastName) {
@@ -416,7 +426,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
       expectedRepaymentDate: '',
       purpose: 'specific_expenses',
       targetBankAccount: '',
-      targetGrant: ''
+      targetGrant: '',
+      status: 'pending'
     });
     setExpenses([{ supplier: '', invoiceNumber: '', amount: '', description: '' }]);
     setApprovals({
@@ -510,6 +521,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
         purpose: formData.purpose,
         targetBankAccount: formData.targetBankAccount || undefined,
         targetGrant: formData.targetGrant || undefined,
+        status: formData.status,
         expenses: validExpenses.map(exp => ({
           supplier: exp.supplier,
           invoiceNumber: exp.invoiceNumber,
@@ -534,7 +546,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
         purpose: formData.purpose,
         targetBankAccount: formData.targetBankAccount || undefined,
         targetGrant: formData.targetGrant || undefined,
-        status: 'pending',
+        status: formData.status,
         expenses: validExpenses.map(exp => ({
           supplier: exp.supplier,
           invoiceNumber: exp.invoiceNumber,
@@ -1274,9 +1286,31 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                         </div>
                       </td>
                       <td className="px-4 py-4 text-center">
-                        <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PREFINANCING_STATUS[prefinancing.status].color}`}>
-                          {PREFINANCING_STATUS[prefinancing.status].label}
-                        </span>
+                        {canModifyStatus() ? (
+                          <select
+                            value={prefinancing.status}
+                            onChange={(e) => updatePrefinancingStatus(prefinancing.id, e.target.value as Prefinancing['status'])}
+                            className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PREFINANCING_STATUS[prefinancing.status].color}`}
+                          >
+                            <option value="pending">En attente</option>
+                            <option value="approved">Approuvé</option>
+                            <option value="rejected">Rejeté</option>
+                          </select>
+                        ): canModifyStatusComptable() ? (
+                          <select
+                            value={prefinancing.status}
+                            onChange={(e) => updatePrefinancingStatus(prefinancing.id, e.target.value as Prefinancing['status'])}
+                            className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PREFINANCING_STATUS[prefinancing.status].color}`}
+                          >
+                            <option value="pending">En attente</option>
+                            <option value="paid">Décaissé</option>
+                            <option value="repaid">Remboursé</option>
+                          </select>
+                        ):(
+                          <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PREFINANCING_STATUS[prefinancing.status].color}`}>
+                            {PREFINANCING_STATUS[prefinancing.status].label}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-4 text-center">
                         <div className="flex items-center justify-center space-x-1">
@@ -1307,7 +1341,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                                   expectedRepaymentDate: prefinancingToEdit.expectedRepaymentDate,
                                   purpose: prefinancingToEdit.purpose,
                                   targetBankAccount: prefinancingToEdit.targetBankAccount || '',
-                                  targetGrant: prefinancingToEdit.targetGrant || ''
+                                  targetGrant: prefinancingToEdit.targetGrant || '',
+                                  status: prefinancingToEdit.status
                                 });
                                 
                                 setExpenses(prefinancingToEdit.expenses?.map(exp => ({
@@ -1342,6 +1377,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                               <Edit className="w-4 h-4" />
                             </button>
                           )}
+
                           {canView && (
                             <button
                               onClick={() => setViewingPrefinancing(prefinancing)}
@@ -1709,6 +1745,70 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                 </div>
               </div>
 
+              {/* Section Statut */}
+              <div className="bg-orange-50 rounded-xl p-6">
+                <h4 className="text-lg font-semibold text-gray-900 mb-4">Statut du Préfinancement</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {canModifyStatus() ? (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Statut (Coordonnateur National)
+                      </label>
+                      <select
+                        value={formData.status}
+                        onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Prefinancing['status'] }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      >
+                        <option value="pending">En attente</option>
+                        <option value="approved">Approuvé</option>
+                        <option value="rejected">Rejeté</option>
+                      </select>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Vous pouvez modifier le statut en tant que Coordonnateur National
+                      </p>
+                    </div>
+                  ) : canModifyStatusComptable() ? (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Statut (Comptable)
+                      </label>
+                      <select
+                        value={formData.status}
+                        onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Prefinancing['status'] }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      >
+                        <option value="pending">En attente</option>
+                        <option value="paid">Décaissé</option>
+                        <option value="repaid">Remboursé</option>
+                      </select>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Vous pouvez modifier le statut en tant que Comptable
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Statut
+                      </label>
+                      <div className={`w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-700 ${PREFINANCING_STATUS[formData.status].color}`}>
+                        {PREFINANCING_STATUS[formData.status].label}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Vous n'avez pas la permission de modifier le statut
+                      </p>
+                    </div>
+                  )}
+                  
+                  <div className="flex items-center justify-center">
+                    <div className={`px-4 py-3 rounded-lg text-center ${PREFINANCING_STATUS[formData.status].color.replace('bg-', 'bg-').replace('text-', 'text-')} border`}>
+                      <div className="text-sm font-medium">
+                        Statut actuel: {PREFINANCING_STATUS[formData.status].label}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Expenses List */}
               <div className="bg-orange-50 rounded-xl p-6">
                 <div className="flex items-center justify-between mb-4">
@@ -1793,7 +1893,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                 ))}
               </div>
 
-              {/* Section Signatures - Identique à EngagementManager */}
+              {/* Section Signatures */}
               {canViewSignatureSection() && (
                 <div className="bg-yellow-50 rounded-xl p-6 border border-yellow-200">
                   <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">

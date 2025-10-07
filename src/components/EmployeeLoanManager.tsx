@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Edit, Trash2, Users, Calendar, DollarSign, CheckCircle, Clock, Download, Printer, X, Search, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, AlertCircle, FileText, Eye } from 'lucide-react';
 import { showSuccess, showValidationError, showWarning } from '../utils/alerts';
 import { EmployeeLoan, BudgetLine, Grant, LOAN_STATUS, SubBudgetLine } from '../types';
@@ -93,6 +93,30 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
 
   // 🎯 FONCTIONS UTILITAIRES POUR LES RÔLES ET PERMISSIONS
 
+  // EFFET POUR PRÉ-REMPLIR LES NOMS DES SIGNATAIRES
+  // useEffect(() => {
+  //   if (userProfile && canViewSignatureSection()) {
+  //     const userName = getUserFullName();
+      
+  //     setApprovals(prev => {
+  //       const newApprovals = { ...prev };
+  //       const userProfession = getUserProfession();
+        
+  //       if (userProfession === 'Coordinateur de la Subvention' && !prev.supervisor1.name) {
+  //         newApprovals.supervisor1.name = userName;
+  //       } else if (userProfession === 'Comptable' && !prev.supervisor2.name) {
+  //         newApprovals.supervisor2.name = userName;
+  //       } else if (userProfession === 'Coordonnateur National' && !prev.finalApproval.name) {
+  //         newApprovals.finalApproval.name = userName;
+  //       }
+        
+  //       return newApprovals;
+  //     });
+  //   }
+  // }, [userProfile, showForm]);
+
+  // console.log('userProfession:', userProfession);
+
   // Récupère le nom complet de l'utilisateur
   const getUserFullName = (): string => {
     if (!userProfile) return '';
@@ -101,24 +125,29 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     }
     return userProfile.email;
   };
-
-  // Récupère la profession de l'utilisateur
-  const getUserProfession = (): string => {
+  // Récupère la profession de l'utilisateur 
+  const getUserProfession = (): string => { 
     return userProfile?.profession || '';
+  };
+
+  // Vérifie si l'utilisateur peut modifier le statut
+  const canModifyStatusComptable = (): boolean => {
+    return getUserProfession() === 'Comptable';
+  };
+
+  const canModifyStatus = (): boolean => {
+    return getUserProfession() === 'Coordonnateur National';
   };
 
   // Vérifie si l'utilisateur peut voir la section signature
   const canViewSignatureSection = (): boolean => {
-    const signatureProfessions = ['Coordinateur de la subvention', 'Comptable', 'Coordonnateur National'];
+    const signatureProfessions = ['Coordinateur de la Subvention', 'Comptable', 'Coordonnateur National'];
     return signatureProfessions.includes(getUserProfession());
-  };
+  }; 
+
 
   // Vérifie si l'utilisateur peut signer un prêt spécifique
   const canSignLoan = (loan: EmployeeLoan | null, signatureType: string): boolean => {
-    if (!loan && signatureType === 'finalApproval') {
-      return false; // Le coordonnateur national ne peut pas signer un nouveau prêt
-    }
-    
     const currentApprovals = loan ? loan.approvals : approvals;
     
     if (!currentApprovals) {
@@ -129,7 +158,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     
     // Vérification basée sur la profession et le type de signature
     const professionCanSign = 
-      (signatureType === 'supervisor1' && userProfession === 'Coordinateur de la subvention') ||
+      (signatureType === 'supervisor1' && userProfession === 'Coordinateur de la Subvention') ||
       (signatureType === 'supervisor2' && userProfession === 'Comptable') ||
       (signatureType === 'finalApproval' && userProfession === 'Coordonnateur National');
 
@@ -139,11 +168,12 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     const existingApproval = currentApprovals[signatureType as keyof typeof currentApprovals];
     if (existingApproval?.signature) return false;
 
-    // Pour le coordonnateur national, vérifier que les deux premiers ont signé
-    if (signatureType === 'finalApproval' && loan) {
+    // POUR LE COORDONNATEUR NATIONAL : vérifier que les autres ont signé
+    if (signatureType === 'finalApproval') {
       const hasSupervisor1Signed = currentApprovals.supervisor1?.signature;
       const hasSupervisor2Signed = currentApprovals.supervisor2?.signature;
       
+      // Le coordonnateur national ne peut signer que si les deux autres ont signé
       if (!hasSupervisor1Signed || !hasSupervisor2Signed) {
         return false;
       }
@@ -157,11 +187,13 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     const userProfession = getUserProfession();
     
     return loans.filter(loan => {
-      if (userProfession === 'Coordinateur de la subvention') {
+      if (userProfession === 'Coordinateur de la Subvention') {
         return !loan.approvals?.supervisor1?.signature;
       } else if (userProfession === 'Comptable') {
+
         return !loan.approvals?.supervisor2?.signature;
       } else if (userProfession === 'Coordonnateur National') {
+
         const hasSupervisor1Signed = loan.approvals?.supervisor1?.signature;
         const hasSupervisor2Signed = loan.approvals?.supervisor2?.signature;
         const hasFinalSigned = loan.approvals?.finalApproval?.signature;
@@ -241,7 +273,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const isSignatureRequired = (loan: EmployeeLoan, signatureType: string): boolean => {
     const userProfession = getUserProfession();
     
-    if (signatureType === 'supervisor1' && userProfession === 'Coordinateur de la subvention') {
+    if (signatureType === 'supervisor1' && userProfession === 'Coordinateur de la Subvention') {
       return !loan.approvals?.supervisor1?.signature;
     } else if (signatureType === 'supervisor2' && userProfession === 'Comptable') {
       return !loan.approvals?.supervisor2?.signature;
@@ -256,76 +288,52 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   // Fonction pour signer un prêt
   const handleSignLoan = (loan: EmployeeLoan | null, signatureType: string) => {
     if (!canSignLoan(loan, signatureType)) {
-      if (signatureType === 'finalApproval' && !loan) {
-        showWarning('Signature impossible', 'Le Coordonnateur National ne peut pas signer un nouveau prêt lors de sa création');
-      } else if (signatureType === 'finalApproval' && loan) {
-        showWarning('Signature impossible', 'Les signatures du Coordinateur de la subvention et du Comptable sont requises avant votre signature');
+      if (signatureType === 'finalApproval') {
+        showWarning('Signature impossible', 'Les signatures du Coordinateur de la Subvention et du Comptable sont requises avant votre signature');
       } else {
         showWarning('Permission refusée', 'Vous ne pouvez pas signer ce prêt');
       }
       return;
     }
 
+    // Logique de signature simplifiée
     if (loan) {
-      // Cas d'un prêt existant (édition)
+      // Cas d'un prêt existant
       const updates: Partial<EmployeeLoan> = {
         approvals: { ...loan.approvals }
       };
 
-      if (signatureType === 'supervisor1') {
-        updates.approvals = {
-          ...updates.approvals,
-          supervisor1: {
-            name: userFullName,
-            date: new Date().toISOString().split('T')[0],
-            signature: true,
-            observation: approvals.supervisor1.observation
-          }
-        };
-      } else if (signatureType === 'supervisor2') {
-        updates.approvals = {
-          ...updates.approvals,
-          supervisor2: {
-            name: userFullName,
-            date: new Date().toISOString().split('T')[0],
-            signature: true,
-            observation: approvals.supervisor2.observation
-          }
-        };
-      } else if (signatureType === 'finalApproval') {
-        updates.approvals = {
-          ...updates.approvals,
-          finalApproval: {
-            name: userFullName,
-            date: new Date().toISOString().split('T')[0],
-            signature: true,
-            observation: approvals.finalApproval.observation
-          }
-        };
-      }
-
-      onUpdateLoan(loan.id, updates);
-      showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès');
-    } else {
-      // Cas d'un nouveau prêt (création) - seulement pour coordinateur et comptable
-      if (signatureType !== 'finalApproval') {
-        const updatedApproval = {
+      // Appliquer la signature
+      updates.approvals = {
+        ...updates.approvals,
+        [signatureType]: {
           name: userFullName,
           date: new Date().toISOString().split('T')[0],
           signature: true,
           observation: approvals[signatureType as keyof typeof approvals].observation
-        };
+        }
+      };
 
-        setApprovals(prev => ({
-          ...prev,
-          [signatureType]: updatedApproval
-        }));
-        
-        showSuccess('Signature préparée', 'Votre signature sera enregistrée avec le nouveau prêt');
-      }
+      onUpdateLoan(loan.id, updates);
+      showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès');
+    } else {
+      // Cas d'un nouveau prêt
+      const updatedApproval = {
+        name: userFullName,
+        date: new Date().toISOString().split('T')[0],
+        signature: true,
+        observation: approvals[signatureType as keyof typeof approvals].observation
+      };
+
+      setApprovals(prev => ({
+        ...prev,
+        [signatureType]: updatedApproval
+      }));
+      
+      showSuccess('Signature préparée', 'Votre signature sera enregistrée avec le nouveau prêt');
     }
     
-    // Réinitialiser les observations après signature
+    // Réinitialiser les observations
     setApprovals(prev => ({
       ...prev,
       [signatureType]: { ...prev[signatureType as keyof typeof approvals], observation: '' }
@@ -578,7 +586,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
           </h3>
           <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
             <div class="signature-box">
-              <h4 style="font-size: 14px; color: #555; margin-bottom: 15px;">Coordinateur de la subvention</h4>
+              <h4 style="font-size: 14px; color: #555; margin-bottom: 15px;">Coordinateur de la Subvention</h4>
               <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
               <div class="form-field" style="min-height: 40px;">${currentApprovals.supervisor1?.name || '_________________________'}</div>
               <p>Date: ${(currentApprovals.supervisor1 as any)?.date || '___/___/_____'}</p>
@@ -1389,10 +1397,10 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                   <h4 className="text-lg font-semibold text-gray-900 mb-4">Signatures d'Approbation</h4>
                   
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    {/* Coordinateur de la subvention */}
+                    {/* Coordinateur de la Subvention */}
                     <div className="bg-white rounded-lg p-4 border border-gray-200">
                       <div className="flex items-center justify-between mb-3">
-                        <h5 className="font-medium text-gray-800">Coordinateur de la subvention</h5>
+                        <h5 className="font-medium text-gray-800">Coordinateur de la Subvention</h5>
                         {canSignLoan(editingLoan, 'supervisor1') && (
                           <button
                             type="button"
@@ -1405,7 +1413,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                       </div>
                       <input
                         type="text"
-                        value={userProfession === 'Coordinateur de la subvention' && !approvals.supervisor1.name ? userFullName : approvals.supervisor1.name}
+                        value={userProfession === 'Coordinateur de la Subvention' && !approvals.supervisor1.name ? userFullName : approvals.supervisor1.name}
                         onChange={(e) => setApprovals(prev => ({
                           ...prev,
                           supervisor1: { ...prev.supervisor1, name: e.target.value }
@@ -1424,7 +1432,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                               supervisor1: { ...prev.supervisor1, signature: e.target.checked }
                             }))}
                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            disabled={userProfession !== 'Coordinateur de la subvention' || !!approvals.supervisor1.name}
+                            disabled={userProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
                           />
                           <span className="text-sm text-gray-700">Signature validée</span>
                         </label>
@@ -1450,7 +1458,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                             rows={3}
                             placeholder="Saisissez votre observation..."
-                            disabled={userProfession !== 'Coordinateur de la subvention' || !!approvals.supervisor1.name}
+                            disabled={userProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
                           />
                         </div>
                       )}
@@ -1868,7 +1876,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                           </td>
                           <td className="px-4 py-4 text-center">
                             <div className="flex items-center justify-center space-x-2">
-                              {/* Signature Coordinateur de la subvention */}
+                              {/* Signature Coordinateur de la Subvention */}
                               <div className="relative group">
                                 {getSignatureIcon(loan, 'supervisor1')}
                                 {isSignatureRequired(loan, 'supervisor1') && (
@@ -1877,7 +1885,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                                   </div>
                                 )}
                                 <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap z-10">
-                                  Coordinateur de la subvention
+                                  Coordinateur de la Subvention
                                   {loan.approvals?.supervisor1?.name && (
                                     <div className="font-medium">
                                       {loan.approvals.supervisor1.name}
@@ -1939,7 +1947,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                             </div>
                           </td>
                           <td className="px-4 py-4 text-center">
-                            {canApprove ? (
+                            {canModifyStatus() ? (
                               <select
                                 value={loan.status}
                                 onChange={(e) => updateLoanStatus(loan.id, e.target.value as EmployeeLoan['status'])}
@@ -1947,11 +1955,18 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                               >
                                 <option value="pending">En attente</option>
                                 <option value="approved">Approuvé</option>
-                                <option value="active">En cours</option>
-                                <option value="completed">Remboursé</option>
                                 <option value="rejected">Rejeté</option>
                               </select>
-                            ) : (
+                              ): canModifyStatusComptable() ? (
+                                <select
+                                      value={loan.status}
+                                      onChange={(e) => updateLoanStatus(loan.id, e.target.value as EmployeeLoan['status'])}
+                                      className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${LOAN_STATUS[loan.status].color}`}
+                                    >
+                                      <option value="active">En cours</option>
+                                      <option value="completed">Remboursé</option>
+                                    </select>
+                            ):(
                               <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${LOAN_STATUS[loan.status].color}`}>
                                 {LOAN_STATUS[loan.status].label}
                               </span>
@@ -1959,15 +1974,6 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                           </td>
                           <td className="px-4 py-4 text-center">
                             <div className="flex items-center justify-center space-x-1">
-                              {canView && (
-                                <button
-                                  onClick={() => exportLoanForm(loan)}
-                                  className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                  title="Exporter la fiche"
-                                >
-                                  <Download className="w-4 h-4" />
-                                </button>
-                              )}
                               {loan.status === 'active' && remainingAmount > 0 && canAddRepayment && (
                                 <button
                                   onClick={() => {

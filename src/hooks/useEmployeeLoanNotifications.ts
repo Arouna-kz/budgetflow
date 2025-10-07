@@ -16,7 +16,7 @@ export const useEmployeeLoanNotifications = (loans: EmployeeLoan[]) => {
     const userProfession = getUserProfession();
     
     return loans.filter(loan => {
-      if (userProfession === 'Coordinateur de la subvention') {
+      if (userProfession === 'Coordinateur de la Subvention') {
         return !loan.approvals?.supervisor1?.signature;
       } else if (userProfession === 'Comptable') {
         return !loan.approvals?.supervisor2?.signature;

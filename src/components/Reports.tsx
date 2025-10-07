@@ -399,7 +399,7 @@ const Reports: React.FC<ReportsProps> = ({
   
   // Carte statistique responsive
   const StatCard = ({ title, value, subtitle, icon: Icon, color }: any) => (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-3 sm:p-4">
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-3 sm:p-4 stat-card-print">
       <div className="flex items-center justify-between">
         <div className="flex-1 min-w-0">
           <p className="text-xs sm:text-sm font-medium text-gray-600 truncate">{title}</p>
@@ -467,25 +467,152 @@ const Reports: React.FC<ReportsProps> = ({
   const PrintStyles = () => (
     <style jsx>{`
       @media print {
-        body { margin: 0; padding: 20px; font-family: Arial, sans-serif; }
-        .no-print { display: none !important; }
-        .print-only { display: block !important; }
-        .print-header { text-align: center; margin-bottom: 30px; }
-        .print-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-        .print-table th, .print-table td { border: 1px solid #000; padding: 8px; text-align: left; font-size: 12px; }
-        .print-table th { background-color: #f0f0f0; font-weight: bold; text-align: center; }
-        .print-amount { text-align: right; }
-        .print-total-row { font-weight: bold; background-color: #f9f9f9; }
-        .print-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
-        .print-subtitle { font-size: 14px; margin-bottom: 5px; }
-        .print-date { font-size: 12px; color: #666; }
-        .print-period { font-size: 12px; margin-bottom: 5px; font-style: italic; }
+        /* Masquer tous les éléments sauf le contenu des rapports */
+        body * {
+          visibility: hidden;
+        }
+        
+        /* Afficher uniquement le composant Reports */
+        .print-container,
+        .print-container * {
+          visibility: visible;
+        }
+        
+        /* Positionner le contenu à imprimer */
+        .print-container {
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 100%;
+          margin: 0;
+          padding: 0;
+        }
+        
+        /* Styles spécifiques pour l'impression */
+        .no-print { 
+          display: none !important; 
+        }
+        
+        .print-only { 
+          display: block !important; 
+        }
+        
+        .print-header { 
+          text-align: center; 
+          margin-bottom: 20px;
+          border-bottom: 2px solid #000;
+          padding-bottom: 15px;
+        }
+        
+        .print-organization {
+          font-size: 16px;
+          font-weight: bold;
+          margin-bottom: 10px;
+          text-transform: uppercase;
+        }
+        
+        .print-title {
+          font-size: 18px;
+          font-weight: bold;
+          margin-bottom: 8px;
+        }
+        
+        .print-subtitle {
+          font-size: 14px;
+          margin-bottom: 5px;
+        }
+        
+        .print-period {
+          font-size: 12px;
+          margin-bottom: 10px;
+          font-style: italic;
+        }
+        
+        .print-date {
+          font-size: 11px;
+          color: #666;
+        }
+        
+        .print-table { 
+          width: 100%; 
+          border-collapse: collapse; 
+          margin: 15px 0;
+          font-size: 10px;
+        }
+        
+        .print-table th, 
+        .print-table td { 
+          border: 1px solid #000; 
+          padding: 6px 8px; 
+          text-align: left; 
+        }
+        
+        .print-table th { 
+          background-color: #f5f5f5 !important; 
+          font-weight: bold; 
+          text-align: center; 
+        }
+        
+        .print-amount { 
+          text-align: right; 
+        }
+        
+        .print-total-row { 
+          font-weight: bold; 
+          background-color: #f0f0f0 !important; 
+        }
+        
+        /* Améliorer l'apparence des cartes en impression */
+        .bg-white {
+          background-color: white !important;
+          box-shadow: none !important;
+          border: 1px solid #ddd !important;
+        }
+        
+        /* Cacher les éléments interactifs */
+        button, select, input {
+          display: none !important;
+        }
+        
+        /* Assurer que le texte est noir */
+        .text-gray-900, .text-gray-700, .text-gray-600 {
+          color: #000 !important;
+        }
+        
+        /* Styles pour les stat cards en impression */
+        .stat-card-print {
+          border: 1px solid #ddd !important;
+          background: white !important;
+          margin-bottom: 10px !important;
+        }
+      }
+      
+      @page {
+        margin: 1cm;
+        size: A4 portrait;
       }
     `}</style>
   );
 
+
+  // Fonction pour gérer l'exportation PDF
+  const handleExportPDF = () => {
+    // Préparer le document pour l'impression
+    const originalTitle = document.title;
+    document.title = `Rapport_${reportType}_${new Date().toLocaleDateString('fr-FR')}`;
+    
+    // Déclencher l'impression
+    window.print();
+    
+    // Restaurer le titre original après un délai
+    setTimeout(() => {
+      document.title = originalTitle;
+    }, 1000);
+  };
+
+
   return (
-    <div className="space-y-4 sm:space-y-6 p-3 sm:p-4 print:bg-white">
+    <div className="space-y-4 sm:space-y-6 p-3 sm:p-4 print:bg-white print-container">
       <PrintStyles />
 
       {/* En-tête d'impression */}
@@ -494,31 +621,32 @@ const Reports: React.FC<ReportsProps> = ({
           CELLULE DE COORDINATION DE LA COOPÉRATION CÔTE D'IVOIRE-UNION EUROPÉENNE
         </div>
         <div className="print-title">
-          {reportType === 'beneficiaries' && 'État des bénéficiaires avances/prêt'}
-          {reportType === 'paid-suppliers' && 'État des fournisseurs payés'}
-          {reportType === 'pending-suppliers' && 'État des fournisseurs en attente de paiements'}
-          {reportType === 'summary' && 'Rapport de synthèse budgétaire'}
-          {reportType === 'detailed' && 'Rapport détaillé des engagements'}
-          {reportType === 'category' && 'Analyse par catégorie budgétaire'}
-        </div>
-        <div className="print-subtitle">
-          {selectedGrantData ? selectedGrantData.name : 'Toutes les subventions'}
+          {reportType === 'beneficiaries' && 'ÉTAT DES BÉNÉFICIAIRES AVANCES/PRÊT'}
+          {reportType === 'paid-suppliers' && 'ÉTAT DES FOURNISSEURS PAYÉS'}
+          {reportType === 'pending-suppliers' && 'ÉTAT DES FOURNISSEURS EN ATTENTE DE PAIEMENTS'}
+          {reportType === 'summary' && 'RAPPORT DE SYNTHÈSE BUDGÉTAIRE'}
+          {reportType === 'detailed' && 'RAPPORT DÉTAILLÉ DES ENGAGEMENTS'}
+          {reportType === 'category' && 'ANALYSE PAR CATÉGORIE BUDGÉTAIRE'}
         </div>
         {selectedGrantData && (
-          <div className="print-subtitle">
-            {selectedGrantData.reference} - {selectedGrantData.grantingOrganization}
-          </div>
+          <>
+            <div className="print-subtitle">
+              <strong>Subvention:</strong> {selectedGrantData.name}
+            </div>
+            <div className="print-subtitle">
+              <strong>Référence:</strong> {selectedGrantData.reference} - {selectedGrantData.grantingOrganization}
+            </div>
+          </>
         )}
         <div className="print-period">
-          {getPeriodDisplayText()}
+          <strong>Période:</strong> {getPeriodDisplayText()}
         </div>
         <div className="print-date">
-          Date d'édition: {new Date().toLocaleDateString('fr-FR', { 
-            weekday: 'long', 
+          <strong>Édité le:</strong> {new Date().toLocaleDateString('fr-FR', { 
             year: 'numeric', 
             month: 'long', 
             day: 'numeric' 
-          })}
+          })} à {new Date().toLocaleTimeString('fr-FR')}
         </div>
       </div>
 
@@ -555,7 +683,7 @@ const Reports: React.FC<ReportsProps> = ({
 
               {canExport && (
                 <button
-                  onClick={() => window.print()}
+                  onClick={handleExportPDF}
                   className="w-full bg-blue-600 text-white px-3 py-2 rounded-lg font-medium text-sm flex items-center justify-center space-x-2"
                 >
                   <FileText className="w-4 h-4" />
@@ -576,7 +704,7 @@ const Reports: React.FC<ReportsProps> = ({
         <div className="flex items-center space-x-3">
           {canExport && (
             <button
-              onClick={() => window.print()}
+              onClick={handleExportPDF}
               className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
             >
               <FileText className="w-4 h-4" />
@@ -726,7 +854,7 @@ const Reports: React.FC<ReportsProps> = ({
             <h3 className="text-lg font-semibold text-gray-900">Rapport de Synthèse</h3>
             {canExport && (
               <button
-                onClick={() => window.print()}
+                onClick={handleExportPDF}
                 className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2 no-print text-sm"
               >
                 <FileText className="w-4 h-4" />
@@ -871,7 +999,7 @@ const Reports: React.FC<ReportsProps> = ({
                 </div>
                 {canExport && (
                   <button
-                    onClick={() => window.print()}
+                    onClick={handleExportPDF}
                     className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center justify-center space-x-2 text-sm"
                   >
                     <FileText className="w-4 h-4" />
@@ -1019,7 +1147,7 @@ const Reports: React.FC<ReportsProps> = ({
             <h3 className="text-lg font-semibold text-gray-900">Analyse par Catégorie</h3>
             {canExport && (
               <button
-                onClick={() => window.print()}
+                onClick={handleExportPDF}
                 className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2 no-print text-sm"
               >
                 <FileText className="w-4 h-4" />
@@ -1136,7 +1264,7 @@ const Reports: React.FC<ReportsProps> = ({
             </h3>
             {canExport && (
               <button
-                onClick={() => window.print()}
+                onClick={handleExportPDF}
                 className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2 no-print text-sm"
               >
                 <FileText className="w-4 h-4" />
@@ -1216,7 +1344,7 @@ const Reports: React.FC<ReportsProps> = ({
             </h3>
             {canExport && (
               <button
-                onClick={() => window.print()}
+                onClick={handleExportPDF}
                 className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2 no-print text-sm"
               >
                 <FileText className="w-4 h-4" />
@@ -1327,6 +1455,89 @@ const Reports: React.FC<ReportsProps> = ({
           </div>
         </div>
         </>
+      )}
+
+
+      {reportType === 'pending-suppliers' && (
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 print:shadow-none print:border-0">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900 flex items-center no-print">
+              <FileText className="w-5 h-5 mr-2" />
+              État des fournisseurs en attente de paiements
+            </h3>
+            <button
+              onClick={handleExportPDF}
+              className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2 no-print"
+            >
+              <FileText className="w-4 h-4" />
+              <span>Imprimer PDF</span>
+            </button>
+            <span className="text-sm text-gray-600 no-print">
+              {selectedGrantData ? selectedGrantData.name : 'Toutes les subventions'}
+            </span>
+          </div>
+          
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse border border-gray-300 print-table">
+              <thead>
+                <tr className="bg-gray-50">
+                  <th className="border border-gray-300 px-4 py-3 text-left text-sm font-medium text-gray-700">Dates</th>
+                  <th className="border border-gray-300 px-4 py-3 text-left text-sm font-medium text-gray-700">Fournisseurs</th>
+                  <th className="border border-gray-300 px-4 py-3 text-center text-sm font-medium text-gray-700">Ligne budgétaire</th>
+                  <th className="border border-gray-300 px-4 py-3 text-center text-sm font-medium text-gray-700">Références factures</th>
+                  <th className="border border-gray-300 px-4 py-3 text-center text-sm font-medium text-gray-700">Montants facture non payés</th>
+                  <th className="border border-gray-300 px-4 py-3 text-center text-sm font-medium text-gray-700">Observations</th>
+                </tr>
+              </thead>
+              <tbody>
+                {getPendingSuppliersState().map(supplier => 
+                  supplier.invoices.map((invoice, index) => (
+                    <tr key={`${supplier.supplier}-${index}`}>
+                      <td className="border border-gray-300 px-4 py-3 text-sm text-gray-900">
+                        {new Date(invoice.date).toLocaleDateString('fr-FR')}
+                      </td>
+                      <td className="border border-gray-300 px-4 py-3 text-sm text-gray-900">
+                        {index === 0 ? supplier.supplier : ''}
+                      </td>
+                      <td className="border border-gray-300 px-4 py-3 text-sm text-gray-900 text-center">
+                        {invoice.budgetLine}
+                      </td>
+                      <td className="border border-gray-300 px-4 py-3 text-sm text-gray-900 text-center">
+                        {invoice.invoiceRef}
+                      </td>
+                      <td className="border border-gray-300 px-4 py-3 text-sm text-gray-900 text-right print-amount">
+                        {formatCurrency(invoice.amount)}
+                      </td>
+                      <td className="border border-gray-300 px-4 py-3 text-sm text-gray-600">
+                        {index === 0 ? supplier.observations : ''}
+                      </td>
+                    </tr>
+                  ))
+                )}
+                {getPendingSuppliersState().length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="border border-gray-300 px-4 py-8 text-center text-gray-500">
+                      Aucun fournisseur en attente de paiement
+                    </td>
+                  </tr>
+                )}
+                {getPendingSuppliersState().length > 0 && (
+                  <tr className="bg-gray-100 font-medium print-total-row">
+                    <td colSpan={4} className="border border-gray-300 px-4 py-3 text-sm text-gray-900">
+                      <strong>Total</strong>
+                    </td>
+                    <td className="border border-gray-300 px-4 py-3 text-sm text-gray-900 text-right print-amount">
+                      <strong>
+                        {formatCurrency(getPendingSuppliersState().reduce((sum, s) => sum + s.totalAmount, 0))}
+                      </strong>
+                    </td>
+                    <td className="border border-gray-300 px-4 py-3"></td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
     </div>
   );

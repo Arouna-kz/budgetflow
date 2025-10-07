@@ -105,6 +105,7 @@ export interface Engagement {
   };
 }
 
+// ************************************Payment**************
 export interface Payment {
   id: string;
   paymentNumber: string;
@@ -149,6 +150,9 @@ export interface Payment {
     };
   };
 }
+
+
+// **************************Fin*************************
 
 export interface BankAccount {
   id: string;

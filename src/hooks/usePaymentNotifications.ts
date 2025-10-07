@@ -16,14 +16,14 @@ export const usePaymentNotifications = (payments: Payment[]) => {
     const userProfession = getUserProfession();
     
     return payments.filter(payment => {
-      if (userProfession === 'Coordinateur de la subvention') {
-        return !payment.approvals?.financialController?.signature;
+      if (userProfession === 'Coordinateur de la Subvention') {
+        return !payment.approvals?.supervisor1?.signature;
       } else if (userProfession === 'Comptable') {
-        return !payment.approvals?.accountingManager?.signature;
+        return !payment.approvals?.supervisor2?.signature;
       } else if (userProfession === 'Coordonnateur National') {
-        const hasFinancialControllerSigned = payment.approvals?.financialController?.signature;
-        const hasAccountingManagerSigned = payment.approvals?.accountingManager?.signature;
-        const hasNationalCoordinatorSigned = payment.approvals?.nationalCoordinator?.signature;
+        const hasFinancialControllerSigned = payment.approvals?.supervisor1?.signature;
+        const hasAccountingManagerSigned = payment.approvals?.supervisor2?.signature;
+        const hasNationalCoordinatorSigned = payment.approvals?.finalApproval?.signature;
         return hasFinancialControllerSigned && hasAccountingManagerSigned && !hasNationalCoordinatorSigned;
       }
       return false;

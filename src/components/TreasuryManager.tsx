@@ -155,7 +155,7 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
   const totalBankBalance = filteredBankAccounts.reduce((sum, account) => sum + account.balance, 0);
   const validatedPayments = payments.filter(payment => payment.status === 'approved' || payment.status === 'paid');
   const totalValidatedPayments = validatedPayments.reduce((sum, payment) => sum + payment.amount, 0);
-  const uncashedPayments = payments.filter(payment => payment.status === 'paid' && !payment.cashedDate);
+  const uncashedPayments = payments.filter(payment => payment.status === 'approved' && !payment.cashedDate);
   const totalUncashedPayments = uncashedPayments.reduce((sum, payment) => sum + payment.amount, 0);
 
   const getAccountTransactions = (accountId: string) => {

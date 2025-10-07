@@ -8,6 +8,7 @@ import { useAuth } from '../hooks/useAuth';
 import { usePermissions } from '../hooks/usePermissions';
 
 
+
 interface PaymentFormProps {
   engagement: Engagement;
   subBudgetLine: SubBudgetLine;
@@ -16,6 +17,7 @@ interface PaymentFormProps {
   bankAccounts: BankAccount[];
   existingPayments: Payment[];
   onSave: (payment: Omit<Payment, 'id'>) => void;
+  onSign: (paymentId: string, updates: Partial<Payment>) => void;0
   onCancel: () => void;
   editingPayment?: Payment | null;
 }
@@ -28,6 +30,7 @@ export default function PaymentForm({
   bankAccounts,
   existingPayments,
   onSave,
+  onSign,
   onCancel,
   editingPayment
 }: PaymentFormProps) {
@@ -39,6 +42,7 @@ export default function PaymentForm({
   // HOOKS D'AUTHENTIFICATION ET PERMISSIONS
   const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
   const { user: currentUser, userProfile } = useAuth();
+
 
    // Récupérer les informations de l'utilisateur connecté depuis useAuth
   useEffect(() => {
@@ -83,7 +87,7 @@ export default function PaymentForm({
 
   // Fonctions pour gérer les signatures
   const canViewSignatureSection = (): boolean => {
-    const signatureProfessions = ['Coordinateur de la subvention', 'Comptable', 'Coordonnateur National'];
+    const signatureProfessions = ['Coordinateur de la Subvention', 'Comptable', 'Coordonnateur National'];
     return signatureProfessions.includes(currentUserProfession);
   };
 
@@ -94,7 +98,7 @@ export default function PaymentForm({
     
     // Vérification basée sur la profession et le type de signature
     const professionCanSign = 
-      (signatureType === 'supervisor1' && currentUserProfession === 'Coordinateur de la subvention') ||
+      (signatureType === 'supervisor1' && currentUserProfession === 'Coordinateur de la Subvention') ||
       (signatureType === 'supervisor2' && currentUserProfession === 'Comptable') ||
       (signatureType === 'finalApproval' && currentUserProfession === 'Coordonnateur National');
 
@@ -117,10 +121,10 @@ export default function PaymentForm({
     return true;
   };
 
-  const handleSignPayment = (signatureType: string) => {
+   const handleSignPayment = (signatureType: string) => {
     if (!canSignPayment(signatureType)) {
       if (signatureType === 'finalApproval') {
-        showWarning('Signature impossible', 'Les signatures du Coordinateur de la subvention et du Comptable sont requises avant votre signature');
+        showWarning('Signature impossible', 'Les signatures du Coordinateur de la Subvention et du Comptable sont requises avant votre signature');
       } else {
         showWarning('Permission refusée', 'Vous ne pouvez pas signer ce paiement');
       }
@@ -131,22 +135,27 @@ export default function PaymentForm({
       name: currentUserName,
       date: new Date().toISOString().split('T')[0],
       signature: true,
-      observation: approvals[signatureType as keyof typeof approvals].observation
+      observation: approvals[signatureType as keyof typeof approvals].observation || ''
     };
 
-    setApprovals(prev => ({
-      ...prev,
+    const newApprovalsState = {
+      ...approvals,
       [signatureType]: updatedApproval
-    }));
-    
-    showSuccess('Signature préparée', 'Votre signature sera enregistrée avec le nouveau paiement');
-    
-    // Réinitialiser l'observation après signature
-    setApprovals(prev => ({
-      ...prev,
-      [signatureType]: { ...prev[signatureType as keyof typeof approvals], observation: '' }
-    }));
+    };
+
+    // Mettre à jour l'état local pour un retour visuel immédiat
+    setApprovals(newApprovalsState);
+
+    // Si c'est un paiement existant, enregistrer la signature immédiatement
+    if (editingPayment && editingPayment.id) {
+      onSign(editingPayment.id, { approvals: newApprovalsState });
+      showSuccess('Signature enregistrée !');
+    } else {
+      // Pour un nouveau paiement, la signature reste en attente de soumission
+      showSuccess('Signature préparée', 'Elle sera enregistrée avec le paiement.');
+    }
   };
+
 
   const toggleObservation = (signatureType: string) => {
     setShowObservations(prev => ({
@@ -189,7 +198,7 @@ export default function PaymentForm({
       // Auto-remplir le nom de l'utilisateur connecté dans les signatures correspondantes
       // if (currentUserName && canViewSignatureSection()) {
       if (currentUserName ) {
-        if (currentUserProfession === 'Coordinateur de la subvention') {
+        if (currentUserProfession === 'Coordinateur de la Subvention') {
           setApprovals(prev => ({
             ...prev,
             supervisor1: { ...prev.supervisor1, name: currentUserName }
@@ -598,7 +607,7 @@ export default function PaymentForm({
           </h3>
           <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
             <div style="border: 1px solid #ccc; padding: 20px; text-align: center; min-height: 150px; border-radius: 8px; background: #fff;">
-              <h4 style="font-size: 14px; color: #555; margin-bottom: 15px;">Coordinateur de la subvention</h4>
+              <h4 style="font-size: 14px; color: #555; margin-bottom: 15px;">Coordinateur de la Subvention</h4>
               <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
               <div style="border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 4px; min-height: 40px; background: #f9f9f9;">
                 ${approvals.supervisor1.name || '_________________________'}
@@ -1025,10 +1034,10 @@ export default function PaymentForm({
               </h3>
               
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Coordinateur de la subvention */}
+                {/* Coordinateur de la Subvention */}
                 <div className="bg-white rounded-lg p-4 border border-gray-200">
                   <div className="flex items-center justify-between mb-3">
-                    <h4 className="font-medium text-gray-800">Coordinateur de la subvention</h4>
+                    <h4 className="font-medium text-gray-800">Coordinateur de la Subvention</h4>
                     {canSignPayment('supervisor1') && (
                       <button
                         type="button"
@@ -1041,7 +1050,7 @@ export default function PaymentForm({
                   </div>
                   <input
                     type="text"
-                    value={currentUserProfession === 'Coordinateur de la subvention' && !approvals.supervisor1.name ? currentUserName : approvals.supervisor1.name}
+                    value={currentUserProfession === 'Coordinateur de la Subvention' && !approvals.supervisor1.name ? currentUserName : approvals.supervisor1.name}
                     onChange={(e) => setApprovals(prev => ({
                       ...prev,
                       supervisor1: { ...prev.supervisor1, name: e.target.value }
@@ -1060,7 +1069,7 @@ export default function PaymentForm({
                           supervisor1: { ...prev.supervisor1, signature: e.target.checked }
                         }))}
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                        disabled={currentUserProfession !== 'Coordinateur de la subvention' || !!approvals.supervisor1.name}
+                        disabled={currentUserProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
                       />
                       <span className="text-sm text-gray-700">Signature validée</span>
                     </label>
@@ -1086,7 +1095,7 @@ export default function PaymentForm({
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         rows={3}
                         placeholder="Saisissez votre observation..."
-                        disabled={currentUserProfession !== 'Coordinateur de la subvention' || !!approvals.supervisor1.name}
+                        disabled={currentUserProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
 
                       />
                     </div>

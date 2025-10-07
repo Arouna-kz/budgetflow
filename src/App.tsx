@@ -23,6 +23,7 @@ import EngagementForm from './components/EngagementForm';
 import EngagementDetails from './components/EngagementDetails';
 import PaymentManager from './components/PaymentManager';
 import PaymentForm from './components/PaymentForm';
+import PaymentDetailsView from './components/PaymentDetailsView';
 import TreasuryManager from './components/TreasuryManager';
 import PrefinancingManager from './components/PrefinancingManager';
 import EmployeeLoanManager from './components/EmployeeLoanManager';
@@ -67,6 +68,8 @@ function App() {
   const [subBudgetLines, setSubBudgetLines] = useState<SubBudgetLine[]>([]);
   const [engagements, setEngagements] = useState<Engagement[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [selectedPaymentForView, setSelectedPaymentForView] = useState<Payment | null>(null);
+  const [showPaymentDetails, setShowPaymentDetails] = useState(false);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
   const [prefinancings, setPrefinancings] = useState<Prefinancing[]>([]);
@@ -628,17 +631,53 @@ function App() {
 };
 
   // Payment management
-  const handleAddPayment = async (payment: Omit<Payment, 'id'>) => {
-    try {
-      const newPayment = await paymentsService.create(payment);
-      setPayments(prev => [...prev, newPayment]);
-      showSuccess('Paiement ajouté', 'Le nouveau paiement a été enregistré');
-      setShowPaymentForm(false);
-    } catch (error) {
-      showError('Erreur', 'Impossible de créer le paiement');
-    }
+  const handleAddPayment = async (paymentData: Omit<Payment, 'id'>) => {
+      try {
+          if (editingPayment) {
+              // --- MODE MODIFICATION ---
+              await paymentsService.update(editingPayment.id, paymentData);
+
+              setPayments(prevPayments => prevPayments.map(p =>
+                  p.id === editingPayment.id ? { ...p, ...paymentData } : p
+              ));
+
+              showSuccess('Paiement modifié', 'Les modifications ont été enregistrées avec succès.');
+              setEditingPayment(null);
+
+          } else {
+              // --- MODE CRÉATION ---
+              // Filtrer les signatures vides avant de sauvegarder
+              const finalApprovals: any = {};
+              const { approvals } = paymentData;
+
+              if (approvals?.supervisor1?.signature) {
+                  finalApprovals.supervisor1 = approvals.supervisor1;
+              }
+              if (approvals?.supervisor2?.signature) {
+                  finalApprovals.supervisor2 = approvals.supervisor2;
+              }
+              // La signature du Coordonnateur National est intentionnellement exclue à la création
+
+              const paymentToCreate = {
+                  ...paymentData,
+                  approvals: finalApprovals,
+              };
+
+              const newPayment = await paymentsService.create(paymentToCreate);
+              setPayments(prev => [...prev, newPayment]);
+              showSuccess('Paiement ajouté', 'Le nouveau paiement a été enregistré avec succès.');
+          }
+
+          setShowPaymentForm(false);
+          setSelectedEngagement(null);
+
+      } catch (error) {
+          console.error("Erreur lors de la sauvegarde du paiement:", error);
+          showError('Erreur de sauvegarde', editingPayment ? 'Impossible de modifier le paiement.' : 'Impossible de créer le paiement.');
+      }
   };
 
+  
   const handleUpdatePayment = async (id: string, updates: Partial<Payment>) => {
     try {
       await paymentsService.update(id, updates);
@@ -650,6 +689,20 @@ function App() {
       showError('Erreur', 'Impossible de modifier le paiement');
     }
   };
+
+
+  const handleSignPayment = async (paymentId: string, updates: Partial<Payment>) => {
+    try {
+      await paymentsService.update(paymentId, updates);
+      setPayments(prev => prev.map(payment =>
+        payment.id === paymentId ? { ...payment, ...updates } : payment
+      ));
+      // Pas de message de succès ici, car il sera affiché dans le formulaire
+    } catch (error) {
+      showError('Erreur', 'Impossible d\'enregistrer la signature');
+    }
+  };
+
 
   // Treasury management
   const handleDeleteBankAccount = async (id: string) => {
@@ -959,12 +1012,14 @@ function App() {
   const handleCreatePaymentFromEngagement = (engagementId: string) => {
     const engagement = engagements.find(eng => eng.id === engagementId);
     if (engagement) {
+      setEditingPayment(null);
       setSelectedEngagement(engagement);
       setShowPaymentForm(true);
     }
   };
 
-  const handleViewPaymentDetails = (paymentId: string) => {
+
+  const handleEditPayment = (paymentId: string) => {
     const payment = payments.find(p => p.id === paymentId);
     if (payment) {
       setEditingPayment(payment);
@@ -975,6 +1030,29 @@ function App() {
       }
     }
   };
+
+  const handleViewPaymentDetails = (paymentId: string) => {
+    const payment = payments.find(p => p.id === paymentId);
+    if (payment) {
+      setSelectedPaymentForView(payment); // Cette fonction doit maintenant exister
+      // Si vous avez un état pour afficher les détails, activez-le aussi
+      setShowPaymentDetails(true);
+    } else {
+      console.error('Paiement non trouvé:', paymentId);
+    }
+  };
+
+  // const handleViewPaymentDetails = (paymentId: string) => {
+  //   const payment = payments.find(p => p.id === paymentId);
+  //   if (payment) {
+  //     setEditingPayment(payment);
+  //     const engagement = engagements.find(eng => eng.id === payment.engagementId);
+  //     if (engagement) {
+  //       setSelectedEngagement(engagement);
+  //       setShowPaymentForm(true);
+  //     }
+  //   }
+  // };
 
   // Show loading screen while checking authentication
   if (authLoading) {
@@ -1071,26 +1149,6 @@ function App() {
   );
 
 
-  // const menuItems = [
-  //   { id: 'dashboard', label: 'Tableau de Bord', icon: BarChart3, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT'] },
-  //   { id: 'grants', label: 'Gestion des Subventions', icon: Banknote, roles: ['ADMIN', 'FINANCE_MANAGER'] },
-  //   { id: 'planning', label: 'Planification', icon: Target, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER'] },
-  //   { id: 'tracking', label: 'Suivi Budgétaire', icon: BarChart3, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
-  //   { id: 'engagements', label: 'Engagements', icon: FileText, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'READ_ONLY'] },
-  //   { id: 'payments', label: 'Paiements', icon: CreditCard, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'READ_ONLY'] },
-  //   { id: 'treasury', label: 'Trésorerie', icon: Banknote, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
-  //   { id: 'prefinancing', label: 'Préfinancements', icon: ArrowRightLeft, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
-  //   { id: 'employee-loans', label: 'Prêts Employés', icon: DollarSign, roles: ['ADMIN', 'FINANCE_MANAGER', 'READ_ONLY'] },
-  //   { id: 'reports', label: 'Rapports', icon: FileText, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
-  //   { id: 'config', label: 'Configuration', icon: Settings, roles: ['ADMIN'] },
-  //   { id: 'profile', label: 'Mon Profil', icon: Users, roles: ['ADMIN', 'FINANCE_MANAGER', 'PROJECT_MANAGER', 'ADMIN_ASSISTANT', 'CONSULTANT', 'READ_ONLY'] },
-  //   { id: 'users', label: 'Utilisateurs', icon: Users, roles: ['ADMIN'] },
-
-  // ];
-
-  // const availableMenuItems = menuItems.filter(item => 
-  //   userRole && item.roles.includes(userRole.code)
-  // );
 
   if (!userProfile) {
   return (
@@ -1373,12 +1431,14 @@ function App() {
                 payments={filteredData.payments}
                 engagements={filteredData.engagements}
                 budgetLines={filteredData.budgetLines}
+                subBudgetLines={filteredData.subBudgetLines}
                 grants={[selectedGrant].filter(Boolean) as Grant[]}
                 bankAccounts={bankAccounts}
                 selectedGrantId={selectedGrantId}
                 onAddPayment={handleAddPayment}
                 onUpdatePayment={handleUpdatePayment}
                 onViewPaymentDetails={handleViewPaymentDetails}
+                onEditPayment={handleEditPayment}
                 onCreatePaymentFromEngagement={handleCreatePaymentFromEngagement}
               />
             )}
@@ -1475,12 +1535,27 @@ function App() {
           bankAccounts={bankAccounts}
           existingPayments={payments}
           onSave={handleAddPayment}
+          onSign={handleSignPayment} 
           onCancel={() => {
             setShowPaymentForm(false);
             setSelectedEngagement(null);
             setEditingPayment(null);
           }}
           editingPayment={editingPayment}
+        />
+      )}
+
+      {showPaymentDetails && selectedPaymentForView && (
+        <PaymentDetailsView
+          payment={selectedPaymentForView}
+          engagement={engagements.find(e => e.id === selectedPaymentForView.engagementId)!}
+          subBudgetLine={subBudgetLines.find(sbl => sbl.id === selectedPaymentForView.subBudgetLineId)!}
+          budgetLine={budgetLines.find(bl => bl.id === selectedPaymentForView.budgetLineId)!}
+          grant={grants.find(g => g.id === selectedPaymentForView.grantId)!}
+          onClose={() => {
+            setShowPaymentDetails(false);
+            setSelectedPaymentForView(null);
+          }}
         />
       )}
 

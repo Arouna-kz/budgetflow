@@ -43,7 +43,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         direction: 'asc'
     });
     const [currentPage, setCurrentPage] = useState(1);
-    const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [itemsPerPage, setItemsPerPage] = useState(15);
 
     // États pour le suivi des modifications
     const [modifiedBudgetLines, setModifiedBudgetLines] = useState<Set<string>>(new Set());
@@ -1288,6 +1288,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                       >
                         <option value="5">5</option>
                         <option value="10">10</option>
+                        <option value="15">15</option>
                         <option value="25">25</option>
                         <option value="50">50</option>
                       </select>
@@ -1311,7 +1312,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                           disabled={currentPage === totalPages}
                           className="p-2 text-gray-400 hover:text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          <ChevronRightIcon className="w-4 h-4" />
+                          <ChevronRight className="w-4 h-4" />
                         </button>
                       </div>
                     )}
@@ -1698,93 +1699,53 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                       <h5 className="font-semibold text-sm text-gray-700">{lineSubBudgetLines.length} Sous-ligne(s)</h5>
                                       {lineSubBudgetLines.map(subLine => {
                                         const subNotificationRate = getNotificationRate(subLine.plannedAmount, subLine.notifiedAmount);
-                                        const isSubUnderNotified = subNotificationRate < 100; // DÉFINITION AJOUTÉE
+                                        const isSubUnderNotified = subNotificationRate < 100;
                                         const subGrant = grants.find(g => g.id === subLine.grantId);
                                         const isSubModified = modifiedSubBudgetLines.has(subLine.id);
                                         
                                         return (
-                                          <tr key={subLine.id} className={`hover:bg-gray-50 ${isSubModified ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''} ${isSubUnderNotified ? 'bg-yellow-50' : ''}`}>
-                                            <td className="px-4 py-4 max-w-[300px]">
-                                              <div className="flex items-center space-x-2">
-                                                {isSubModified && (
-                                                  <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0" title="Modifié récemment"></div>
+                                          <div key={subLine.id} className={`border rounded-lg p-3 space-y-2 ${isSubModified ? 'border-blue-500' : 'border-gray-200'} ${isSubUnderNotified ? 'bg-yellow-50' : 'bg-white'}`}>
+                                            <div className="flex justify-between items-start">
+                                              <div>
+                                                <span className="text-xs text-gray-500">{subLine.code}</span>
+                                                <h6 className="font-medium text-gray-800">{subLine.name}</h6>
+                                              </div>
+                                              <div className="flex space-x-1">
+                                                {canEdit && (
+                                                  <button
+                                                    onClick={() => startEditSubBudgetLine(subLine)}
+                                                    className="p-1 text-gray-400 hover:text-blue-600"
+                                                    title="Modifier"
+                                                  >
+                                                    <Edit className="w-3 h-3" />
+                                                  </button>
                                                 )}
-                                                <div className="min-w-0 flex-1">
-                                                  <ExpandableText 
-                                                    text={subLine.name} 
-                                                    id={`subline-name-${subLine.id}`}
-                                                    maxLength={40}
-                                                  />
-                                                  <div className="mt-1">
-                                                    <ExpandableText 
-                                                      text={subLine.code} 
-                                                      id={`subline-code-${subLine.id}`}
-                                                      maxLength={30}
-                                                    />
-                                                  </div>
-                                                  {subLine.description && (
-                                                    <div className="mt-1">
-                                                      <ExpandableText 
-                                                        text={subLine.description} 
-                                                        id={`subline-desc-${subLine.id}`}
-                                                        maxLength={50}
-                                                      />
-                                                    </div>
-                                                  )}
-                                                </div>
-                                              </div>
-                                            </td>
-                                            <td className="px-4 py-4 text-right text-sm font-medium text-gray-900">
-                                              {subGrant ? formatCurrency(subLine.plannedAmount, subGrant.currency) : subLine.plannedAmount.toLocaleString('fr-FR')}
-                                            </td>
-                                            <td className="px-4 py-4 text-right text-sm font-medium text-gray-900">
-                                              {subGrant ? formatCurrency(subLine.notifiedAmount, subGrant.currency) : subLine.notifiedAmount.toLocaleString('fr-FR')}
-                                            </td>
-                                            <td className="px-4 py-4 text-center">
-                                              <div className="flex items-center justify-center space-x-2">
-                                                {isSubUnderNotified && (
-                                                  <AlertCircle className="w-4 h-4 text-orange-500" />
+                                                {canDelete && (
+                                                  <button
+                                                    onClick={() => handleDeleteSubBudgetLine(subLine)}
+                                                    className="p-1 text-gray-400 hover:text-red-600"
+                                                    title="Supprimer"
+                                                  >
+                                                    <Trash2 className="w-3 h-3" />
+                                                  </button>
                                                 )}
-                                                <span className={`text-sm font-medium ${
-                                                  isSubUnderNotified ? 'text-orange-600' : 'text-green-600'
-                                                }`}>
-                                                  {subNotificationRate.toFixed(1)}%
-                                                </span>
                                               </div>
-                                              <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1 max-w-[80px] mx-auto">
-                                                <div 
-                                                  className={`h-1.5 rounded-full transition-all duration-300 ${
-                                                    isSubUnderNotified ? 'bg-orange-500' : 'bg-green-500'
-                                                  }`}
-                                                  style={{ width: `${Math.min(subNotificationRate, 100)}%` }}
-                                                ></div>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2 text-xs">
+                                              <div>
+                                                <p className="text-gray-500">Planifié</p>
+                                                <p className="font-medium">{subGrant ? formatCurrency(subLine.plannedAmount, subGrant.currency) : ''}</p>
                                               </div>
-                                            </td>
-                                            {(canEdit || canDelete) && (
-                                              <td className="px-4 py-4 text-center">
-                                                <div className="flex items-center justify-center space-x-1">
-                                                  {canEdit && (
-                                                    <button
-                                                      onClick={() => startEditSubBudgetLine(subLine)}
-                                                      className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                                      title="Modifier"
-                                                    >
-                                                      <Edit className="w-4 h-4" />
-                                                    </button>
-                                                  )}
-                                                  {canDelete && (
-                                                    <button
-                                                      onClick={() => handleDeleteSubBudgetLine(subLine)}
-                                                      className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                                      title="Supprimer"
-                                                    >
-                                                      <Trash2 className="w-4 h-4" />
-                                                    </button>
-                                                  )}
-                                                </div>
-                                              </td>
-                                            )}
-                                          </tr>
+                                              <div>
+                                                <p className="text-gray-500">Notifié</p>
+                                                <p className="font-medium">{subGrant ? formatCurrency(subLine.notifiedAmount, subGrant.currency) : ''}</p>
+                                              </div>
+                                              <div className="col-span-2">
+                                                <p className="text-gray-500">Taux Notification</p>
+                                                <p className={`font-bold ${isSubUnderNotified ? 'text-orange-600' : 'text-green-600'}`}>{subNotificationRate.toFixed(1)}%</p>
+                                              </div>
+                                            </div>
+                                          </div>
                                         );
                                       })}
                                     </div>

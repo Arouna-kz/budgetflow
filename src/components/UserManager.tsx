@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase';
 import { usersService } from '../services/supabaseService';
 import { PermissionService } from '../services/permissionService';
 import { usePermissions } from '../hooks/usePermissions';
+import { adminService } from '../services/adminService';
 
 interface UserManagerProps {
   users: User[];
@@ -50,6 +51,13 @@ const UserManager: React.FC<UserManagerProps> = ({
   const [editingRole, setEditingRole] = useState<UserRole | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // États pour la modification du mot de passe
+  const [showPasswordChange, setShowPasswordChange] = useState(false);
+  const [passwordFormData, setPasswordFormData] = useState({
+    newPassword: '',
+    confirmPassword: ''
+  });
 
   // États pour la pagination et tri
   const [currentPage, setCurrentPage] = useState(1);
@@ -158,8 +166,13 @@ const UserManager: React.FC<UserManagerProps> = ({
       confirmPassword: '',
       isActive: true
     });
+    setPasswordFormData({
+      newPassword: '',
+      confirmPassword: ''
+    });
     setShowUserForm(false);
     setEditingUser(null);
+    setShowPasswordChange(false);
     setShowPassword(false);
     setSelectedRole(null);
     setIsSignatoryRole(false);
@@ -177,6 +190,64 @@ const UserManager: React.FC<UserManagerProps> = ({
     setShowRoleForm(false);
     setEditingRole(null);
   };
+
+  // Gestion de la modification du mot de passe
+  const handlePasswordChange = async (e: React.FormEvent) => {
+  e.preventDefault();
+  
+  if (!canEditUsers) {
+    showError('Permission refusée', 'Vous n\'avez pas la permission de modifier les mots de passe');
+    return;
+  }
+
+  if (!editingUser) {
+    showError('Erreur', 'Aucun utilisateur sélectionné');
+    return;
+  }
+
+  if (!passwordFormData.newPassword || !passwordFormData.confirmPassword) {
+    showValidationError('Champs manquants', 'Veuillez remplir tous les champs du mot de passe');
+    return;
+  }
+
+  if (passwordFormData.newPassword !== passwordFormData.confirmPassword) {
+    showValidationError('Mots de passe différents', 'Les mots de passe saisis ne correspondent pas');
+    return;
+  }
+
+  if (passwordFormData.newPassword.length < 6) {
+    showValidationError('Mot de passe trop court', 'Le mot de passe doit contenir au moins 6 caractères');
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    // Utiliser le service admin au lieu de supabase.auth.admin directement
+    await adminService.updateUserPassword(editingUser.id, passwordFormData.newPassword);
+
+    showSuccess('Succès', 'Mot de passe modifié avec succès');
+    setShowPasswordChange(false);
+    setPasswordFormData({
+      newPassword: '',
+      confirmPassword: ''
+    });
+  } catch (error: any) {
+    console.error('Error updating password:', error);
+    
+    // Gestion d'erreurs plus spécifique
+    if (error.message.includes('not allowed') || error.status === 403) {
+      showError(
+        'Permission insuffisante', 
+        'Votre compte n\'a pas les permissions nécessaires pour modifier les mots de passe. Contactez l\'administrateur système.'
+      );
+    } else {
+      showError('Erreur', error.message || 'Une erreur est survenue lors de la modification du mot de passe');
+    }
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Gestion de la soumission des formulaires
   const handleUserSubmit = async (e: React.FormEvent) => {
@@ -494,6 +565,13 @@ const UserManager: React.FC<UserManagerProps> = ({
       confirmPassword: '',
       isActive: user.isActive
     });
+    
+    // Réinitialiser le formulaire de mot de passe
+    setPasswordFormData({
+      newPassword: '',
+      confirmPassword: ''
+    });
+    setShowPasswordChange(false);
     
     setSelectedRole(userRole || null);
     setIsSignatoryRole(isSignatory);
@@ -823,12 +901,24 @@ const UserManager: React.FC<UserManagerProps> = ({
                             </span>
                             <div className="flex space-x-1">
                               {canEditUsers && (
-                                <button
-                                  onClick={() => startEditUser(user)}
-                                  className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                                >
-                                  <Edit className="w-3 h-3" />
-                                </button>
+                                <>
+                                  <button
+                                    onClick={() => startEditUser(user)}
+                                    className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                                  >
+                                    <Edit className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      startEditUser(user);
+                                      setShowPasswordChange(true);
+                                    }}
+                                    className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
+                                    title="Modifier le mot de passe"
+                                  >
+                                    <Shield className="w-3 h-3" />
+                                  </button>
+                                </>
                               )}
                               {canDeleteUsers && user.id !== currentUser.id && (
                                 <button
@@ -934,13 +1024,25 @@ const UserManager: React.FC<UserManagerProps> = ({
                               <td className="px-4 py-3 text-center">
                                 <div className="flex items-center justify-center space-x-1">
                                   {canEditUsers && (
-                                    <button
-                                      onClick={() => startEditUser(user)}
-                                      className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                      title="Modifier"
-                                    >
-                                      <Edit className="w-4 h-4" />
-                                    </button>
+                                    <>
+                                      <button
+                                        onClick={() => startEditUser(user)}
+                                        className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                        title="Modifier"
+                                      >
+                                        <Edit className="w-4 h-4" />
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          startEditUser(user);
+                                          setShowPasswordChange(true);
+                                        }}
+                                        className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                                        title="Modifier le mot de passe"
+                                      >
+                                        <Shield className="w-4 h-4" />
+                                      </button>
+                                    </>
                                   )}
                                   {canDeleteUsers && user.id !== currentUser.id && (
                                     <button
@@ -1183,7 +1285,7 @@ const UserManager: React.FC<UserManagerProps> = ({
         </div>
       </div>
 
-      {/* Modals pour les formulaires (inchangés) */}
+      {/* Modal formulaire utilisateur */}
       {showUserForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -1191,7 +1293,7 @@ const UserManager: React.FC<UserManagerProps> = ({
               {editingUser ? 'Modifier l\'utilisateur' : 'Nouvel utilisateur'}
             </h3>
             
-<form onSubmit={handleUserSubmit} className="space-y-4">
+            <form onSubmit={handleUserSubmit} className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1312,6 +1414,80 @@ const UserManager: React.FC<UserManagerProps> = ({
                 />
               </div>
 
+              {/* Section modification du mot de passe pour l'admin */}
+              {editingUser && (
+                <div className="border-t border-gray-200 pt-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <h4 className="text-sm font-medium text-gray-700">Modifier le mot de passe</h4>
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswordChange(!showPasswordChange)}
+                      className="text-blue-600 hover:text-blue-700 text-sm font-medium"
+                    >
+                      {showPasswordChange ? 'Masquer' : 'Modifier le mot de passe'}
+                    </button>
+                  </div>
+
+                  {showPasswordChange && (
+                    <div className="bg-blue-50 rounded-lg p-4 space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Nouveau mot de passe *
+                          </label>
+                          <div className="relative">
+                            <input
+                              type={showPassword ? 'text' : 'password'}
+                              value={passwordFormData.newPassword}
+                              onChange={(e) => setPasswordFormData(prev => ({ ...prev, newPassword: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-10"
+                              placeholder="Nouveau mot de passe"
+                              required
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword(!showPassword)}
+                              className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                            >
+                              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Confirmer le mot de passe *
+                          </label>
+                          <input
+                            type={showPassword ? 'text' : 'password'}
+                            value={passwordFormData.confirmPassword}
+                            onChange={(e) => setPasswordFormData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            placeholder="Confirmer le mot de passe"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={handlePasswordChange}
+                          disabled={loading}
+                          className="bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 transition-colors disabled:opacity-50 text-sm"
+                        >
+                          {loading ? 'Modification...' : 'Mettre à jour le mot de passe'}
+                        </button>
+                      </div>
+
+                      <div className="text-xs text-blue-600 bg-blue-100 rounded p-2">
+                        <strong>Note :</strong> Le mot de passe doit contenir au moins 6 caractères. L'utilisateur devra utiliser ce nouveau mot de passe pour ses prochaines connexions.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {!editingUser && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
@@ -1387,13 +1563,15 @@ const UserManager: React.FC<UserManagerProps> = ({
         </div>
       )}
 
+      {/* Modal formulaire rôle */}
       {showRoleForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-4xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
               {editingRole ? 'Modifier le rôle' : 'Nouveau rôle'}
             </h3>
-<form onSubmit={handleRoleSubmit} className="space-y-6">
+            
+            <form onSubmit={handleRoleSubmit} className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
