@@ -1032,16 +1032,7 @@ const UserManager: React.FC<UserManagerProps> = ({
                                       >
                                         <Edit className="w-4 h-4" />
                                       </button>
-                                      <button
-                                        onClick={() => {
-                                          startEditUser(user);
-                                          setShowPasswordChange(true);
-                                        }}
-                                        className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                                        title="Modifier le mot de passe"
-                                      >
-                                        <Shield className="w-4 h-4" />
-                                      </button>
+                                     
                                     </>
                                   )}
                                   {canDeleteUsers && user.id !== currentUser.id && (

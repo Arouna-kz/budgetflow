@@ -429,7 +429,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                 </label>
                 <div className="relative">
                   <input
-                    type="number"
+                    type="number" 
                     step="0.01"
                     min="0"
                     value={formData.totalAmount}

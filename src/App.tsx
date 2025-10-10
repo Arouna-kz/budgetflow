@@ -1238,28 +1238,26 @@ function App() {
               </div>
 
               {/* Mobile menu button */}
-              <button
+              {/* <button
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
                 className="lg:hidden p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+              </button> */}
+              {/* Mobile menu button */}
+              <button
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                className="xl:hidden p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
               </button>
-              
-              {/* Desktop user info and logout - Masqué sur mobile */}
-              <div className="hidden md:block text-right">
+
+              <div className="hidden xl:block text-right">
                 <p className="text-sm font-medium text-gray-900">
                   {userProfile.firstName} {userProfile.lastName}
                 </p>
                 <p className="text-xs text-gray-500">{userRole?.name}</p>
               </div>
-              
-              <button
-                onClick={handleLogout}
-                className="hidden lg:block p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                title="Déconnexion"
-              >
-                <LogOut className="w-5 h-5" />
-              </button>
             </div>
           </div>
         </div>
@@ -1268,10 +1266,10 @@ function App() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex space-x-8">
           {/* Sidebar */}
-          <div className={`${isMobileMenuOpen ? 'block' : 'hidden'} lg:block w-64 flex-shrink-0 fixed lg:relative inset-y-0 left-0 z-50 lg:z-auto bg-white lg:bg-transparent overflow-y-auto pt-16 lg:pt-0`}>
+          <div className={`${isMobileMenuOpen ? 'block' : 'hidden'} xl:block w-64 flex-shrink-0 fixed xl:relative inset-y-0 left-0 z-50 xl:z-auto bg-white xl:bg-transparent overflow-y-auto pt-16 xl:pt-0`}>
             <nav className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 h-full lg:h-auto max-h-screen lg:max-h-none overflow-y-auto">
               {/* Mobile Header Info */}
-              <div className="lg:hidden mb-6 pb-4 border-b border-gray-200">
+              <div className="xl:hidden mb-6 pb-4 border-b border-gray-200">
                 <div className="flex items-center space-x-3 mb-4">
                   <div className="p-2 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl">
                     <Target className="w-6 h-6 text-white" />
@@ -1328,7 +1326,7 @@ function App() {
                
                 
                 {/* Logout Button - Only for mobile */}
-                <div className="lg:hidden pt-4 border-t border-gray-200">
+                <div className="xl:hidden pt-4 border-t border-gray-200">
                   <button
                     onClick={() => {
                       handleLogout();
@@ -1347,13 +1345,13 @@ function App() {
           {/* Mobile overlay */}
           {isMobileMenuOpen && (
             <div 
-              className="lg:hidden fixed inset-0 bg-black bg-opacity-50 z-40"
+              className="xl:hidden fixed inset-0 bg-black bg-opacity-50 z-40"
               onClick={() => setIsMobileMenuOpen(false)}
             />
           )}
 
           {/* Main Content */}
-          <div className="flex-1">
+          <div className="flex-1 xl:ml-8 w-full">
             {activeTab === 'dashboard' && (
               <Dashboard 
                 grants={[selectedGrant].filter(Boolean) as Grant[]}
