@@ -1063,7 +1063,7 @@ function App() {
             <Target className="w-8 h-8 text-white" />
           </div>
           <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Chargement de BudgetBASE...</p>
+          <p className="text-gray-600">Chargement de Budget BASE...</p>
           <p className="text-xs text-gray-500 mt-2">Vérification de l'authentification...</p>
         </div>
       </div>
@@ -1181,7 +1181,7 @@ function App() {
                   </div>
                 </div>
                 <div className="hidden sm:block">
-                  <h1 className="text-xl font-bold text-gray-900">BudgetBASE</h1>
+                  <h1 className="text-xl font-bold text-gray-900">Budget BASE</h1>
                   <p className="text-xs text-gray-500">Gestion Budgétaire</p>
                 </div>
               </div>
@@ -1275,7 +1275,7 @@ function App() {
                     <Target className="w-6 h-6 text-white" />
                   </div>
                   <div>
-                    <h1 className="text-lg font-bold text-gray-900">BudgetBASE</h1>
+                    <h1 className="text-lg font-bold text-gray-900">Budget BASE</h1>
                     <p className="text-xs text-gray-500">Gestion Budgétaire</p>
                   </div>
                 </div>

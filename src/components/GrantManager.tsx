@@ -452,7 +452,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Date de début
+                    Date de début *
                   </label>
                   <input
                     type="date"
@@ -464,7 +464,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Date de fin
+                    Date de fin *
                   </label>
                   <input
                     type="date"
