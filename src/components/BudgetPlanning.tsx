@@ -227,7 +227,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         
         // Marges
         const margin = {
-          top: 20,
+          top: 25,
           right: 15,
           bottom: 20,
           left: 15
@@ -236,56 +236,118 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         const contentWidth = pageWidth - margin.left - margin.right;
         let yPosition = margin.top;
 
+        // Fonction pour charger et ajouter le logo (UNIQUEMENT sur la première page)
+        const addLogoToPDF = () => {
+          return new Promise<number>((resolve) => {
+            try {
+              // Créer une image pour le logo
+              const logoImg = new Image();
+              logoImg.src = '/budgetbase/logo.png';
+              
+              logoImg.onload = () => {
+                try {
+                  // Ajouter le logo en haut à gauche de la première page
+                  const logoWidth = 30;
+                  const logoHeight = (logoImg.height * logoWidth) / logoImg.width;
+                  
+                  pdf.addImage(
+                    logoImg, 
+                    'PNG', 
+                    margin.left, 
+                    8,
+                    logoWidth, 
+                    logoHeight
+                  );
+                  resolve(logoHeight);
+                } catch (error) {
+                  console.warn('Erreur lors de l\'ajout du logo:', error);
+                  resolve(0);
+                }
+              };
+
+              logoImg.onerror = () => {
+                console.warn('Logo non trouvé, continuation sans logo');
+                resolve(0);
+              };
+
+              setTimeout(() => resolve(0), 2000);
+            } catch (error) {
+              console.warn('Erreur lors du chargement du logo:', error);
+              resolve(0);
+            }
+          });
+        };
+
+        // Ajouter le logo uniquement sur la première page
+        const logoHeight = await addLogoToPDF();
+        
+        // Ajuster la position Y pour l'en-tête de la première page en fonction du logo
+        const headerY = logoHeight > 0 ? Math.max(margin.top, 8 + logoHeight + 5) : margin.top;
+        yPosition = headerY;
+
         // Fonction pour vérifier si on a besoin d'une nouvelle page
         const checkPageBreak = (requiredHeight: number) => {
           if (yPosition + requiredHeight > pageHeight - margin.bottom) {
             pdf.addPage();
+            // Sur les pages suivantes, réinitialiser la position Y sans logo
             yPosition = margin.top;
             return true;
           }
           return false;
         };
 
-        // En-tête du PDF
-        pdf.setFontSize(20);
+        // EN-TÊTE DE LA PREMIÈRE PAGE AVEC LOGO
+        pdf.setFontSize(16);
         pdf.setFont('helvetica', 'bold');
+        
+        // Titre principal - centré
         pdf.text('RAPPORT BUDGÉTAIRE', pageWidth / 2, yPosition, { align: 'center' });
-        yPosition += 10;
+        yPosition += 8;
 
-        pdf.setFontSize(10);
+        // Informations de génération
+        pdf.setFontSize(9);
         pdf.setFont('helvetica', 'normal');
-        pdf.text(`Généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR')}`, margin.left, yPosition);
-        yPosition += 5;
-
+        
+        // Si logo présent, aligner à droite du logo, sinon à gauche
+        const infoX = logoHeight > 0 ? margin.left + 35 : margin.left;
+        
+        pdf.text(`Généré le ${new Date().toLocaleDateString('fr-FR')}`, infoX, yPosition);
+        pdf.text(`à ${new Date().toLocaleTimeString('fr-FR')}`, infoX, yPosition + 4);
+        
+        // Informations de la subvention alignées à droite
         if (selectedGrant) {
-          pdf.text(`Subvention : ${selectedGrant.name} (${selectedGrant.reference})`, margin.left, yPosition);
-          yPosition += 8;
+          const grantText = `Subvention: ${selectedGrant.name}`;
+          const grantTextWidth = pdf.getTextWidth(grantText);
+          pdf.text(grantText, pageWidth - margin.right - grantTextWidth, yPosition);
+          pdf.text(`Réf: ${selectedGrant.reference}`, pageWidth - margin.right - pdf.getTextWidth(`Réf: ${selectedGrant.reference}`), yPosition + 4);
         }
+
+        yPosition += 12;
 
         // Ligne de séparation
         pdf.setDrawColor(200, 200, 200);
         pdf.line(margin.left, yPosition, pageWidth - margin.right, yPosition);
-        yPosition += 15;
+        yPosition += 10;
 
-        // Cartes de résumé
-        const cardWidth = contentWidth / 3 - 10;
-        const cardHeight = 25;
+        // CARTES DE RÉSUMÉ (uniquement sur la première page)
+        const cardWidth = contentWidth / 3 - 8;
+        const cardHeight = 22;
 
         // Vérifier si on a la place pour les cartes
-        checkPageBreak(cardHeight + 10);
+        checkPageBreak(cardHeight + 15);
 
         // Carte 1 - Total Planifié
         pdf.setFillColor(219, 234, 254);
         pdf.rect(margin.left, yPosition, cardWidth, cardHeight, 'F');
-        pdf.setDrawColor(209, 213, 219);
+        pdf.setDrawColor(150, 150, 150);
         pdf.rect(margin.left, yPosition, cardWidth, cardHeight);
         
-        pdf.setFontSize(10);
-        pdf.setFont('helvetica', 'normal');
-        pdf.text('Total Planifié', margin.left + 5, yPosition + 8);
-        
-        pdf.setFontSize(12);
+        pdf.setFontSize(8);
         pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(0, 0, 0);
+        pdf.text('TOTAL PLANIFIÉ', margin.left + cardWidth / 2, yPosition + 6, { align: 'center' });
+        
+        pdf.setFontSize(10);
         pdf.setTextColor(37, 99, 235);
         
         const totalPlannedText = selectedGrant 
@@ -295,23 +357,22 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         pdf.text(
           totalPlannedText,
           margin.left + cardWidth / 2, 
-          yPosition + 18,
+          yPosition + 15,
           { align: 'center' }
         );
-        pdf.setTextColor(0, 0, 0);
 
         // Carte 2 - Total Notifié
         pdf.setFillColor(220, 252, 231);
-        pdf.rect(margin.left + cardWidth + 5, yPosition, cardWidth, cardHeight, 'F');
-        pdf.setDrawColor(209, 213, 219);
-        pdf.rect(margin.left + cardWidth + 5, yPosition, cardWidth, cardHeight);
+        pdf.rect(margin.left + cardWidth + 4, yPosition, cardWidth, cardHeight, 'F');
+        pdf.setDrawColor(150, 150, 150);
+        pdf.rect(margin.left + cardWidth + 4, yPosition, cardWidth, cardHeight);
+        
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(0, 0, 0);
+        pdf.text('TOTAL NOTIFIÉ', margin.left + cardWidth + 4 + cardWidth / 2, yPosition + 6, { align: 'center' });
         
         pdf.setFontSize(10);
-        pdf.setFont('helvetica', 'normal');
-        pdf.text('Total Notifié', margin.left + cardWidth + 10, yPosition + 8);
-        
-        pdf.setFontSize(12);
-        pdf.setFont('helvetica', 'bold');
         pdf.setTextColor(5, 150, 105);
         
         const totalNotifiedText = selectedGrant 
@@ -320,46 +381,51 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         
         pdf.text(
           totalNotifiedText,
-          margin.left + cardWidth + 5 + cardWidth / 2, 
-          yPosition + 18,
+          margin.left + cardWidth + 4 + cardWidth / 2, 
+          yPosition + 15,
           { align: 'center' }
         );
-        pdf.setTextColor(0, 0, 0);
 
         // Carte 3 - Taux Notification
         pdf.setFillColor(243, 232, 255);
-        pdf.rect(margin.left + (cardWidth + 5) * 2, yPosition, cardWidth, cardHeight, 'F');
-        pdf.setDrawColor(209, 213, 219);
-        pdf.rect(margin.left + (cardWidth + 5) * 2, yPosition, cardWidth, cardHeight);
+        pdf.rect(margin.left + (cardWidth + 4) * 2, yPosition, cardWidth, cardHeight, 'F');
+        pdf.setDrawColor(150, 150, 150);
+        pdf.rect(margin.left + (cardWidth + 4) * 2, yPosition, cardWidth, cardHeight);
+        
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(0, 0, 0);
+        pdf.text('TAUX NOTIFICATION', margin.left + (cardWidth + 4) * 2 + cardWidth / 2, yPosition + 6, { align: 'center' });
         
         pdf.setFontSize(10);
-        pdf.setFont('helvetica', 'normal');
-        pdf.text('Taux Notification', margin.left + (cardWidth + 5) * 2 + 5, yPosition + 8);
-        
-        pdf.setFontSize(12);
-        pdf.setFont('helvetica', 'bold');
         pdf.setTextColor(124, 58, 237);
         
         pdf.text(
           `${overallNotificationRate.toFixed(1)}%`,
-          margin.left + (cardWidth + 5) * 2 + cardWidth / 2, 
-          yPosition + 18,
+          margin.left + (cardWidth + 4) * 2 + cardWidth / 2, 
+          yPosition + 15,
           { align: 'center' }
         );
-        pdf.setTextColor(0, 0, 0);
 
+        pdf.setTextColor(0, 0, 0);
         yPosition += cardHeight + 15;
 
-        // Titre du tableau
+        // TITRE DU TABLEAU
         checkPageBreak(20);
-        pdf.setFontSize(16);
-        pdf.setFont('helvetica', 'bold');
-        pdf.text(`Lignes Budgétaires (${filteredBudgetLines.length})`, margin.left, yPosition);
-        yPosition += 10;
+        
+        // Pour les pages suivantes, ajouter un titre de section
+        const drawSectionTitle = () => {
+          pdf.setFontSize(14);
+          pdf.setFont('helvetica', 'bold');
+          pdf.text(`LIGNES BUDGÉTAIRES (${filteredBudgetLines.length})`, margin.left, yPosition);
+          yPosition += 8;
+        };
 
-        // Préparer les données du tableau avec des largeurs ajustées
-        const tableHeaders = ['Code', 'Lignes et Sous lignes', 'Budget Planifié', 'Budget Notifié', 'Taux'];
-        const columnWidths = [20, 70, 40, 40, 15];
+        drawSectionTitle();
+
+        // Préparer les données du tableau
+        const tableHeaders = ['Code', 'Lignes et Sous-lignes', 'Budget Planifié', 'Budget Notifié', 'Taux'];
+        const columnWidths = [18, 75, 35, 35, 17];
         const baseRowHeight = 8;
         const headerHeight = 8;
         const cellPadding = 2;
@@ -367,16 +433,39 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         // Vérifier si on a la place pour l'en-tête du tableau
         checkPageBreak(headerHeight + baseRowHeight);
 
-        // En-tête du tableau - CORRIGÉ
-        pdf.setFillColor(243, 244, 246);
-        pdf.rect(margin.left, yPosition, contentWidth, headerHeight, 'F');
+        // Fonction pour dessiner l'en-tête du tableau
+        const drawTableHeader = (y: number) => {
+          pdf.setFillColor(243, 244, 246);
+          pdf.rect(margin.left, y, contentWidth, headerHeight, 'F');
+          
+          let headerX = margin.left;
+          tableHeaders.forEach((header, index) => {
+            pdf.setFontSize(8);
+            pdf.setFont('helvetica', 'bold');
+            const align = index >= 2 ? 'right' : 'left';
+            const textX = align === 'right' ? headerX + columnWidths[index] - cellPadding : headerX + cellPadding;
+            
+            if (index === 1) {
+              const lines = pdf.splitTextToSize(header, columnWidths[index] - cellPadding * 2);
+              lines.forEach((line: string, lineIndex: number) => {
+                pdf.text(line, textX, y + 3 + (lineIndex * 3));
+              });
+            } else {
+              pdf.text(header, textX, y + 5, { align });
+            }
+            
+            pdf.setDrawColor(200, 200, 200);
+            pdf.rect(headerX, y, columnWidths[index], headerHeight);
+            
+            headerX += columnWidths[index];
+          });
+        };
 
-        // Fonction pour dessiner une ligne de tableau - AMÉLIORÉE
+        // Fonction pour dessiner une ligne de tableau
         const drawTableRow = (cells: { text: string; align: 'left' | 'right' | 'center'; fontSize: number; fontStyle: string; maxWidth: number; textColor?: number[] }[], rowY: number, bgColor?: number[]) => {
           let currentX = margin.left;
           let maxCellHeight = baseRowHeight;
 
-          // Calculer la hauteur maximale nécessaire pour cette ligne
           cells.forEach((cell, index) => {
             pdf.setFontSize(cell.fontSize);
             pdf.setFont('helvetica', cell.fontStyle as any);
@@ -386,24 +475,22 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
             maxCellHeight = Math.max(maxCellHeight, cellHeight);
           });
 
-          // Dessiner le fond de la ligne
           if (bgColor) {
             pdf.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
             pdf.rect(margin.left, rowY, contentWidth, maxCellHeight, 'F');
           }
 
-          // Dessiner les bordures et le texte
           currentX = margin.left;
           cells.forEach((cell, index) => {
-            // Bordure de la cellule
-            pdf.setDrawColor(209, 213, 219);
+            pdf.setDrawColor(200, 200, 200);
             pdf.rect(currentX, rowY, columnWidths[index], maxCellHeight);
 
-            // Texte de la cellule
             pdf.setFontSize(cell.fontSize);
             pdf.setFont('helvetica', cell.fontStyle as any);
             if (cell.textColor) {
               pdf.setTextColor(cell.textColor[0], cell.textColor[1], cell.textColor[2]);
+            } else {
+              pdf.setTextColor(0, 0, 0);
             }
 
             const lines = pdf.splitTextToSize(cell.text, cell.maxWidth - cellPadding * 2);
@@ -417,52 +504,25 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
               pdf.text(line, textX, textY + (lineIndex * cell.fontSize * 0.35), { align: cell.align });
             });
 
-            pdf.setTextColor(0, 0, 0);
             currentX += columnWidths[index];
           });
 
+          pdf.setTextColor(0, 0, 0);
           return maxCellHeight;
         };
 
-        // Fonction pour redessiner l'en-tête du tableau
-        const drawTableHeader = (y: number) => {
-          pdf.setFillColor(243, 244, 246);
-          pdf.rect(margin.left, y, contentWidth, headerHeight, 'F');
-          
-          let headerX = margin.left;
-          tableHeaders.forEach((header, index) => {
-            pdf.setFontSize(8);
-            pdf.setFont('helvetica', 'bold');
-            const align = index >= 2 ? 'right' : 'left';
-            const textX = align === 'right' ? headerX + columnWidths[index] - cellPadding : headerX + cellPadding;
-            
-            // Gestion spéciale pour l'en-tête "Lignes et Sous lignes"
-            if (index === 1) {
-              const lines = ['Lignes et', 'Sous lignes'];
-              lines.forEach((line, lineIndex) => {
-                pdf.text(line, textX, y + 3 + (lineIndex * 3));
-              });
-            } else {
-              pdf.text(header, textX, y + 5, { align });
-            }
-            
-            // Bordures des colonnes
-            pdf.setDrawColor(209, 213, 219);
-            pdf.rect(headerX, y, columnWidths[index], headerHeight);
-            
-            headerX += columnWidths[index];
-          });
-        };
+        // Dessiner l'en-tête du tableau initial
+        drawTableHeader(yPosition);
+        yPosition += headerHeight;
 
-        // Données du tableau - CORRIGÉ
-        let isFirstRowOnNewPage = true;
+        // Données du tableau
+        let isFirstRowOnNewPage = false;
 
         filteredBudgetLines.forEach((budgetLine, lineIndex) => {
           const notificationRate = getNotificationRate(budgetLine.plannedAmount, budgetLine.notifiedAmount);
           const lineGrant = grants.find(g => g.id === budgetLine.grantId);
           const lineSubBudgetLines = filteredSubBudgetLines.filter(sub => sub.budgetLineId === budgetLine.id);
 
-          // Préparer les cellules pour la ligne principale
           const plannedAmountText = lineGrant 
             ? `${formatCurrencyForPDF(budgetLine.plannedAmount, lineGrant.currency)} ${getCurrencySymbolForPDF(lineGrant.currency)}`
             : formatCurrencyForPDF(budgetLine.plannedAmount, 'EUR');
@@ -511,20 +571,18 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
             }
           ];
 
-          // Vérifier si on a la place pour la ligne principale
-          const estimatedHeight = baseRowHeight * 2; // Estimation conservatrice
+          const estimatedHeight = baseRowHeight * 2;
           if (checkPageBreak(estimatedHeight)) {
             isFirstRowOnNewPage = true;
           }
 
-          // Redessiner l'en-tête si c'est la première ligne sur une nouvelle page
           if (isFirstRowOnNewPage) {
+            // Sur les nouvelles pages, redessiner seulement l'en-tête du tableau
             drawTableHeader(yPosition);
             yPosition += headerHeight;
             isFirstRowOnNewPage = false;
           }
 
-          // Dessiner la ligne principale avec fond alterné
           const bgColor = lineIndex % 2 === 0 ? [249, 250, 251] : [255, 255, 255];
           const rowHeight = drawTableRow(mainRowCells, yPosition, bgColor);
           yPosition += rowHeight;
@@ -582,27 +640,26 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
               }
             ];
 
-            // Vérifier si on a la place pour la sous-ligne
             const subEstimatedHeight = baseRowHeight * 2;
             if (checkPageBreak(subEstimatedHeight)) {
               drawTableHeader(yPosition);
               yPosition += headerHeight;
             }
 
-            // Dessiner la sous-ligne avec fond bleu clair
             const subRowHeight = drawTableRow(subRowCells, yPosition, [239, 246, 255]);
             yPosition += subRowHeight;
           });
         });
 
-        // Pied de page sur chaque page
+        // PIED DE PAGE SUR CHAQUE PAGE
         const pageCount = pdf.getNumberOfPages();
         for (let i = 1; i <= pageCount; i++) {
           pdf.setPage(i);
           
           pdf.setFontSize(8);
           pdf.setFont('helvetica', 'normal');
-          pdf.setTextColor(156, 163, 175);
+          pdf.setTextColor(100, 100, 100);
+          
           pdf.text(
             `Page ${i} sur ${pageCount}`,
             pageWidth / 2,
@@ -611,7 +668,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
           );
           
           pdf.text(
-            `Document généré automatiquement - ${new Date().getFullYear()}`,
+            `© ${new Date().getFullYear()} BudgetBase - Document généré automatiquement`,
             pageWidth / 2,
             pageHeight - 5,
             { align: 'center' }
@@ -619,7 +676,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         }
 
         // Sauvegarder le PDF
-        pdf.save(`budget_planning_${new Date().toISOString().split('T')[0]}.pdf`);
+        pdf.save(`rapport_budget_${new Date().toISOString().split('T')[0]}.pdf`);
         
         showSuccess('PDF généré', 'Le rapport PDF a été généré avec succès');
       } catch (error) {

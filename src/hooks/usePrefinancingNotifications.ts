@@ -1,9 +1,8 @@
-// hooks/usePrefinancingNotifications.ts
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from './useAuth';
 import { Prefinancing } from '../types';
 
-export const usePrefinancingNotifications = (prefinancings: Prefinancing[]) => {
+export const usePrefinancingNotifications = (prefinancings: Prefinancing[], selectedGrantId?: string) => {
   const { userProfile } = useAuth();
   const [pendingSignatures, setPendingSignatures] = useState<Prefinancing[]>([]);
   const [notificationCount, setNotificationCount] = useState(0);
@@ -15,7 +14,12 @@ export const usePrefinancingNotifications = (prefinancings: Prefinancing[]) => {
   const getPendingSignatures = useCallback((): Prefinancing[] => {
     const userProfession = getUserProfession();
     
-    return prefinancings.filter(prefinancing => {
+    // Filtrer d'abord par subvention si spécifiée
+    const filteredPrefinancings = selectedGrantId 
+      ? prefinancings.filter(pref => pref.grantId === selectedGrantId)
+      : prefinancings;
+    
+    return filteredPrefinancings.filter(prefinancing => {
       if (userProfession === 'Coordinateur de la Subvention') {
         return !prefinancing.approvals?.supervisor1?.signature;
       } else if (userProfession === 'Comptable') {
@@ -28,7 +32,7 @@ export const usePrefinancingNotifications = (prefinancings: Prefinancing[]) => {
       }
       return false;
     });
-  }, [prefinancings, getUserProfession]);
+  }, [prefinancings, getUserProfession, selectedGrantId]);
 
   useEffect(() => {
     const pending = getPendingSignatures();

@@ -1,23 +1,25 @@
-// hooks/useEngagementNotifications.ts
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from './useAuth';
 import { Engagement } from '../types';
 
-export const useEngagementNotifications = (engagements: Engagement[]) => {
+export const useEngagementNotifications = (engagements: Engagement[], selectedGrantId?: string) => {
   const { userProfile } = useAuth();
   const [pendingSignatures, setPendingSignatures] = useState<Engagement[]>([]);
   const [notificationCount, setNotificationCount] = useState(0);
 
-  // Récupère la profession de l'utilisateur
   const getUserProfession = useCallback((): string => {
     return userProfile?.profession || '';
   }, [userProfile]);
 
-  // Récupère les engagements en attente de signature pour l'utilisateur actuel
   const getPendingSignatures = useCallback((): Engagement[] => {
     const userProfession = getUserProfession();
     
-    return engagements.filter(engagement => {
+    // Filtrer d'abord par subvention si spécifiée
+    const filteredEngagements = selectedGrantId 
+      ? engagements.filter(eng => eng.grantId === selectedGrantId)
+      : engagements;
+    
+    return filteredEngagements.filter(engagement => {
       if (userProfession === 'Coordinateur de la Subvention') {
         return !engagement.approvals?.supervisor1?.signature;
       } else if (userProfession === 'Comptable') {
@@ -30,9 +32,8 @@ export const useEngagementNotifications = (engagements: Engagement[]) => {
       }
       return false;
     });
-  }, [engagements, getUserProfession]);
+  }, [engagements, getUserProfession, selectedGrantId]);
 
-  // Met à jour les notifications
   useEffect(() => {
     const pending = getPendingSignatures();
     setPendingSignatures(pending);

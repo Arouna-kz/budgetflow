@@ -1,9 +1,8 @@
-// hooks/usePaymentNotifications.ts
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from './useAuth';
 import { Payment } from '../types';
 
-export const usePaymentNotifications = (payments: Payment[]) => {
+export const usePaymentNotifications = (payments: Payment[], selectedGrantId?: string) => {
   const { userProfile } = useAuth();
   const [pendingSignatures, setPendingSignatures] = useState<Payment[]>([]);
   const [notificationCount, setNotificationCount] = useState(0);
@@ -15,7 +14,12 @@ export const usePaymentNotifications = (payments: Payment[]) => {
   const getPendingSignatures = useCallback((): Payment[] => {
     const userProfession = getUserProfession();
     
-    return payments.filter(payment => {
+    // Filtrer d'abord par subvention si spécifiée
+    const filteredPayments = selectedGrantId 
+      ? payments.filter(payment => payment.grantId === selectedGrantId)
+      : payments;
+    
+    return filteredPayments.filter(payment => {
       if (userProfession === 'Coordinateur de la Subvention') {
         return !payment.approvals?.supervisor1?.signature;
       } else if (userProfession === 'Comptable') {
@@ -28,7 +32,7 @@ export const usePaymentNotifications = (payments: Payment[]) => {
       }
       return false;
     });
-  }, [payments, getUserProfession]);
+  }, [payments, getUserProfession, selectedGrantId]);
 
   useEffect(() => {
     const pending = getPendingSignatures();

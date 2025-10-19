@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { TrendingUp, AlertTriangle, CheckCircle, Eye, FileText, Download, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Search, Filter, Menu, X } from 'lucide-react';
-import { BudgetLine, SubBudgetLine, Grant, Engagement } from '../types';
+import { TrendingUp, AlertTriangle, CheckCircle, Eye, FileText, Download, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Search, Filter, Menu, X, ChevronRight as ExpandIcon, ChevronDown as CollapseIcon } from 'lucide-react';
+import { BudgetLine, SubBudgetLine, Grant, Engagement, Payment } from '../types';
 import jsPDF from 'jspdf';
 import { showSuccess, showError, showValidationError, confirmDelete, showWarning } from '../utils/alerts';
 import { usePermissions } from '../hooks/usePermissions';
@@ -10,6 +10,7 @@ interface BudgetTrackingProps {
   subBudgetLines: SubBudgetLine[];
   grants: Grant[];
   engagements: Engagement[];
+  payments: Payment[];
   selectedGrantId: string;
   onViewEngagements: (subBudgetLineId: string) => void;
 }
@@ -22,10 +23,10 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   subBudgetLines, 
   grants, 
   engagements, 
+  payments = [],
   selectedGrantId, 
   onViewEngagements 
 }) => {
-  // 1. TOUS les hooks doivent être appelés AVANT toute logique conditionnelle
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
@@ -36,14 +37,16 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
-  const tableRef = useRef<HTMLTableElement>(null);
-
   
+  // Nouvel état pour gérer l'expansion des textes
+  const [expandedTexts, setExpandedTexts] = useState<{[key: string]: boolean}>({});
+  
+  const tableRef = useRef<HTMLTableElement>(null);
 
   // Vérification des permissions
   const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
 
-   // Définition des permissions spécifiques au module
+  // Définition des permissions spécifiques au module
   const canView = hasPermission('tracking', 'view');
   const canExport = hasPermission('tracking', 'export');
   const canViewDetails = hasPermission('tracking', 'view_details');
@@ -67,6 +70,21 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     return () => window.removeEventListener('resize', checkScreenSize);
   }, []);
 
+  // 🎯 FONCTIONS DE CALCUL RÉELLES POUR LE DÉCAISSEMENT (PAIEMENTS UNIQUEMENT)
+  const getSpentAmount = (subBudgetLineId: string) => {
+    // 1. Paiements décaissés (statut 'paid') pour cette sous-ligne budgétaire
+    const linePayments = (payments || []).filter(p => 
+      p.subBudgetLineId === subBudgetLineId && p.status === 'paid'
+    );
+    const paymentsAmount = linePayments.reduce((sum, payment) => sum + payment.amount, 0);
+    
+    return paymentsAmount;
+  };
+
+  const getTotalDisbursedForAllSubBudgetLines = () => {
+    return filteredSubBudgetLines.reduce((total, line) => total + getSpentAmount(line.id), 0);
+  };
+
   // Filtrer les sous-lignes budgétaires selon les sélections
   const getFilteredSubBudgetLines = () => {
     if (selectedBudgetLines.length === 0) {
@@ -84,7 +102,82 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     setCurrentPage(1);
   }, [searchTerm, filteredSubBudgetLinesData.length, selectedBudgetLines]);
 
-  // 2. MAINTENANT nous pouvons faire la vérification conditionnelle
+  // Fonction pour basculer l'expansion d'un texte
+  const toggleTextExpansion = (lineId: string, field: string) => {
+    const key = `${lineId}-${field}`;
+    setExpandedTexts(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  };
+
+  // Fonction pour vérifier si un texte est trop long et nécessite une expansion
+  const isTextLong = (text: string, maxLength: number = 30) => {
+    return text && text.length > maxLength;
+  };
+
+  // Composant pour afficher le texte avec option d'expansion
+  const ExpandableText = ({ 
+    text, 
+    lineId, 
+    field, 
+    maxLength = 30,
+    className = "",
+    textClassName = ""
+  }: {
+    text: string;
+    lineId: string;
+    field: string;
+    maxLength?: number;
+    className?: string;
+    textClassName?: string;
+  }) => {
+    const key = `${lineId}-${field}`;
+    const isExpanded = expandedTexts[key] || false;
+    const needsExpansion = isTextLong(text, maxLength);
+
+    if (!text) {
+      return <span className={`${className} ${textClassName}`}>N/A</span>;
+    }
+
+    if (!needsExpansion) {
+      return <span className={`${className} ${textClassName}`}>{text}</span>;
+    }
+
+    const displayText = isExpanded ? text : `${text.substring(0, maxLength)}...`;
+
+    return (
+      <div className={`${className} group relative flex items-start`}>
+        <span className={`${textClassName} flex-1`}>{displayText}</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleTextExpansion(lineId, field);
+          }}
+          className="ml-1 text-blue-600 hover:text-blue-800 focus:outline-none flex-shrink-0 flex items-center mt-0.5"
+          title={isExpanded ? "Réduire le texte" : "Afficher tout le texte"}
+        >
+          {isExpanded ? (
+            <CollapseIcon className="w-3 h-3" />
+          ) : (
+            <ExpandIcon className="w-3 h-3" />
+          )}
+        </button>
+        
+        {/* Tooltip au survol pour voir le texte complet */}
+        {!isExpanded && (
+          <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block z-10">
+            <div className="bg-gray-900 text-white text-xs rounded py-1 px-2 max-w-xs break-words whitespace-normal">
+              {text}
+              <div className="absolute top-full left-2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900"></div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Si l'utilisateur n'a pas la permission de view, on n'affiche que le message d'accès refusé
   if (permissionsLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -108,15 +201,17 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     );
   }
 
- 
-  // Calculer le montant décaissé pour chaque sous-ligne budgétaire
-  const getSpentAmount = (subBudgetLineId: string) => {
-    const lineEngagements = engagements.filter(eng => 
-      eng.subBudgetLineId === subBudgetLineId && 
-      (eng.status === 'paid' || eng.status === 'approved')
+  if (!canView) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <TrendingUp className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-700 mb-2">Accès non autorisé</h2>
+          <p className="text-gray-500">Vous n'avez pas les permissions nécessaires pour visualiser le suivi budgétaire.</p>
+        </div>
+      </div>
     );
-    return lineEngagements.reduce((sum, eng) => sum + eng.amount, 0);
-  };
+  }
 
   const getEngagementRate = (line: SubBudgetLine) => {
     return line.notifiedAmount > 0 ? (line.engagedAmount / line.notifiedAmount) * 100 : 0;
@@ -133,12 +228,11 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     return 'text-green-600';
   };
 
-  
-
+  // 🎯 CALCULS DES TOTAUX AVEC DÉCAISSEMENTS RÉELS
   const totalNotified = filteredSubBudgetLinesData.reduce((sum, line) => sum + line.notifiedAmount, 0);
   const totalEngaged = filteredSubBudgetLinesData.reduce((sum, line) => sum + line.engagedAmount, 0);
   const totalAvailable = filteredSubBudgetLinesData.reduce((sum, line) => sum + line.availableAmount, 0);
-  const totalSpent = filteredSubBudgetLinesData.reduce((sum, line) => sum + getSpentAmount(line.id), 0);
+  const totalSpent = getTotalDisbursedForAllSubBudgetLines();
   const overallEngagementRate = totalNotified > 0 ? (totalEngaged / totalNotified) * 100 : 0;
   const overallSpentRate = totalNotified > 0 ? (totalSpent / totalNotified) * 100 : 0;
 
@@ -155,14 +249,13 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     });
   };
 
-  // Calculer les statistiques par ligne budgétaire
+  // Calculer les statistiques par ligne budgétaire AVEC DÉCAISSEMENTS RÉELS
   const budgetLineStats = filteredBudgetLines.map(budgetLine => {
     const subLines = filteredSubBudgetLinesData.filter(line => line.budgetLineId === budgetLine.id);
     const notified = subLines.reduce((sum, line) => sum + line.notifiedAmount, 0);
     const engaged = subLines.reduce((sum, line) => sum + line.engagedAmount, 0);
     const available = subLines.reduce((sum, line) => sum + line.availableAmount, 0);
     const spent = subLines.reduce((sum, line) => sum + getSpentAmount(line.id), 0);
-    
     
     return {
       ...budgetLine,
@@ -175,9 +268,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     };
   }).filter(line => line.notified > 0);
 
-  
-
-  // Préparer les données avec toutes les métriques calculées
+  // Préparer les données avec toutes les métriques calculées (INCLUANT DÉCAISSEMENTS RÉELS)
   const tableData = filteredSubBudgetLinesData.map(line => {
     const spentAmount = getSpentAmount(line.id);
     const engagementRate = getEngagementRate(line);
@@ -258,7 +349,16 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     setSelectedBudgetLines([]);
   };
 
-  // Fonction pour exporter le tableau en PDF avec vérification de permission
+  // Fonction pour exporter le tableau en PDF
+  const loadImage = (url: string): Promise<HTMLImageElement> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = url;
+    });
+  };
+
   const exportTableToPDF = async (exportAllData: boolean = false) => {
     if (!canExport) {
       showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
@@ -272,15 +372,25 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
       const margin = 15;
-      const headerHeight = 50;
-  
+      
+      // Charger le logo
+      let logo: HTMLImageElement | null = null;
+      try {
+        logo = await loadImage('/budgetbase/logo.png');
+      } catch (error) {
+        console.warn('Logo non chargé, continuation sans logo');
+      }
+
+      // Ajuster la hauteur de l'en-tête en fonction de la présence du logo
+      const headerHeight = logo ? 60 : 50;
+      
       const dataToExport = exportAllData ? filteredAndSortedData : paginatedData;
       
       if (dataToExport.length === 0) {
         alert('Aucune donnée à exporter');
         return;
       }
-  
+
       const columnConfig = [
         { key: 'name', label: 'Sous-ligne', width: 60, align: 'left' },
         { key: 'code', label: 'Code', width: 20, align: 'center' },
@@ -292,17 +402,16 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         { key: 'engagementRate', label: 'Taux Eng.', width: 22, align: 'center' },
         { key: 'spentRate', label: 'Taux Dép.', width: 22, align: 'center' }
       ];
-  
+
       const totalWidth = columnConfig.reduce((sum, col) => sum + col.width, 0);
       const scaleFactor = (pageWidth - (margin * 2)) / totalWidth;
       columnConfig.forEach(col => { col.width *= scaleFactor; });
-  
-      // Fonction splitText SANS troncature
+
       const splitText = (text: string, maxWidth: number) => {
         const words = text.split(' ');
         const lines = [];
         let currentLine = '';
-  
+
         for (let i = 0; i < words.length; i++) {
           const word = words[i];
           const testLine = currentLine ? currentLine + ' ' + word : word;
@@ -323,7 +432,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         
         return lines;
       };
-  
+
       const formatNumberWithSpaces = (number: number, currency: string = 'XOF') => {
         if (currency === 'XOF') {
           return Math.round(number).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
@@ -335,29 +444,59 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         
         return decimalPart === '00' ? integerPart : `${integerPart}.${decimalPart}`;
       };
-  
+
       let currentY = margin + headerHeight;
-      let currentPage = 0;
-  
-      // En-tête pour la première page
-      const drawHeader = () => {
+      let currentPageNum = 0;
+
+      const drawHeader = (isFirstPage: boolean = true) => {
+        let yPosition = margin;
+
+        // Logo sur la première page uniquement
+        if (isFirstPage && logo) {
+          const logoWidth = 25;
+          const logoHeight = (logo.height * logoWidth) / logo.width;
+          
+          // Ajouter le logo en haut à gauche
+          pdf.addImage(
+            logo,
+            'PNG',
+            margin,
+            yPosition,
+            logoWidth,
+            logoHeight
+          );
+          
+          // Ajuster la position Y pour le texte après le logo
+          yPosition += logoHeight + 5;
+        }
+
+        // Titre principal
         pdf.setFontSize(16);
         pdf.setFont('helvetica', 'bold');
-        pdf.text('SUIVI BUDGÉTAIRE DÉTAILLÉ', margin, margin + 10);
+        pdf.text('SUIVI BUDGÉTAIRE DÉTAILLÉ', margin, yPosition);
         
         pdf.setFontSize(12);
         pdf.setFont('helvetica', 'normal');
-        pdf.text('Détail par Sous-ligne Budgétaire', margin, margin + 18);
+        pdf.text('Détail par Sous-ligne Budgétaire', margin, yPosition + 8);
         
         if (selectedGrant) {
-          pdf.text(`Subvention: ${selectedGrant.name}`, margin, margin + 26);
-          pdf.text(`Référence: ${selectedGrant.reference}`, margin, margin + 32);
-          pdf.text(`Devise: ${selectedGrant.currency}`, margin, margin + 38);
+          pdf.text(`Subvention: ${selectedGrant.name}`, margin, yPosition + 16);
+          pdf.text(`Référence: ${selectedGrant.reference}`, margin, yPosition + 22);
+          pdf.text(`Devise: ${selectedGrant.currency}`, margin, yPosition + 28);
         }
+
+        // Informations de génération alignées à droite
+        const dateText = `Généré le ${new Date().toLocaleDateString('fr-FR')}`;
+        const timeText = `à ${new Date().toLocaleTimeString('fr-FR')}`;
+        
+        pdf.setFontSize(9);
+        pdf.text(dateText, pageWidth - margin - pdf.getTextWidth(dateText), margin + 8);
+        pdf.text(timeText, pageWidth - margin - pdf.getTextWidth(timeText), margin + 14);
       };
-  
-      drawHeader();
-  
+
+      // Appel initial de l'en-tête avec logo
+      drawHeader(true);
+
       // En-têtes du tableau
       let xPosition = margin;
       pdf.setFillColor(59, 130, 246);
@@ -382,20 +521,25 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         pdf.text(col.label, Math.max(x, xPosition + 2), currentY + 7);
         xPosition += col.width;
       });
-  
+
       currentY += 16;
-  
+
       // Données
       pdf.setFont('helvetica', 'normal');
       pdf.setTextColor(0, 0, 0);
-  
+
       dataToExport.forEach((line, rowIndex) => {
         if (currentY > pageHeight - 30) {
           pdf.addPage();
-          currentPage++;
-          currentY = margin + headerHeight + 16;
-          drawHeader();
+          currentPageNum++;
+          currentY = margin + 40;
           
+          // En-tête simplifié pour les pages suivantes
+          pdf.setFontSize(12);
+          pdf.setFont('helvetica', 'bold');
+          pdf.text('SUIVI BUDGÉTAIRE DÉTAILLÉ (suite)', margin, margin + 10);
+          
+          // Réinitialiser les en-têtes du tableau
           xPosition = margin;
           pdf.setFillColor(59, 130, 246);
           pdf.rect(xPosition, currentY, pageWidth - (margin * 2), 10, 'F');
@@ -424,21 +568,21 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           pdf.setFont('helvetica', 'normal');
           pdf.setTextColor(0, 0, 0);
         }
-  
+
         // Fond alterné
         if (rowIndex % 2 === 0) {
           pdf.setFillColor(249, 250, 251);
           pdf.rect(margin, currentY - 4, pageWidth - (margin * 2), 12, 'F');
         }
-  
+
         pdf.setFontSize(8);
         xPosition = margin;
         let maxLinesInRow = 1;
-  
+
         columnConfig.forEach((col) => {
           let value: any = line[col.key as keyof typeof line];
           let displayValue = '';
-  
+
           if (col.key === 'engagementRate' || col.key === 'spentRate') {
             displayValue = typeof value === 'number' ? `${value.toFixed(1)}%` : '0%';
           } else if (col.key.includes('Amount')) {
@@ -446,7 +590,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           } else {
             displayValue = value?.toString() || '';
           }
-  
+
           if (col.key === 'name' || col.key === 'budgetLineName') {
             const lines = splitText(displayValue, col.width - 4);
             
@@ -467,7 +611,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
             } else {
               x = xPosition + 2;
             }
-  
+
             // Couleurs conditionnelles
             if (col.key === 'availableAmount' && value < 0) {
               pdf.setTextColor(220, 38, 38);
@@ -477,17 +621,43 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
               else if (col.key === 'engagementRate') pdf.setTextColor(5, 150, 105);
               else pdf.setTextColor(59, 130, 246);
             }
-  
+
             pdf.text(displayValue, x, currentY + 2);
             pdf.setTextColor(0, 0, 0);
           }
-  
+
           xPosition += col.width;
         });
-  
+
         currentY += 5 + (maxLinesInRow * 3.5);
       });
-  
+
+      // Pied de page sur toutes les pages
+      const totalPages = pdf.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        pdf.setPage(i);
+        
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(100, 100, 100);
+        
+        // Numéro de page
+        pdf.text(
+          `Page ${i} sur ${totalPages}`,
+          pageWidth / 2,
+          pageHeight - 10,
+          { align: 'center' }
+        );
+        
+        // Copyright
+        pdf.text(
+          `© ${new Date().getFullYear()} BudgetBase - Document généré automatiquement`,
+          pageWidth / 2,
+          pageHeight - 5,
+          { align: 'center' }
+        );
+      }
+
       // Télécharger le PDF
       const fileName = `suivi-budgetaire-complet-${selectedGrant?.reference || 'global'}-${new Date().toISOString().split('T')[0]}.pdf`;
       pdf.save(fileName);
@@ -501,8 +671,6 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       setIsGeneratingPDF(false);
     }
   };
-
-  
 
   // Composant pour les cartes statistiques responsive
   const StatCard = ({ title, value, subtitle, icon: Icon, color }: any) => (
@@ -519,19 +687,6 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       </div>
     </div>
   );
-
-  // Si l'utilisateur n'a pas la permission de view, on n'affiche que le message d'accès refusé
-  if (!canView) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <TrendingUp className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-gray-700 mb-2">Accès non autorisé</h2>
-          <p className="text-gray-500">Vous n'avez pas les permissions nécessaires pour visualiser le suivi budgétaire.</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-4 sm:space-y-6 p-3 sm:p-4">
@@ -657,6 +812,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         <StatCard
           title="Montant Décaissé"
           value={selectedGrant ? formatCurrency(totalSpent, selectedGrant.currency) : totalSpent.toLocaleString('fr-FR')}
+          subtitle={`Taux: ${overallSpentRate.toFixed(2)}%`}
           icon={FileText}
           color="text-purple-600"
         />
@@ -668,8 +824,8 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         />
         <StatCard
           title="Taux d'Engagement"
-          value={`${overallEngagementRate.toFixed(1)}%`}
-          subtitle={`Décaissé: ${overallSpentRate.toFixed(1)}%`}
+          value={`${overallEngagementRate.toFixed(2)}%`}
+          subtitle={`Décaissé: ${overallSpentRate.toFixed(2)}%`}
           icon={AlertTriangle}
           color="text-red-600"
         />
@@ -733,15 +889,33 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                   <div key={line.id} className="bg-gray-50 rounded-lg p-3 border">
                     <div className="flex justify-between items-start mb-2">
                       <div className="flex-1">
-                        <h4 className="font-semibold text-gray-900 text-sm truncate">{line.name}</h4>
-                        <p className="text-xs text-gray-600">{line.code} • {line.budgetLineName}</p>
+                        <h4 className="font-semibold text-gray-900 text-sm">
+                          <ExpandableText 
+                            text={line.name} 
+                            lineId={line.id} 
+                            field="name"
+                            maxLength={25}
+                            textClassName="font-semibold text-gray-900"
+                          />
+                        </h4>
+                        <p className="text-xs text-gray-600 flex items-center flex-wrap">
+                          {line.code} • 
+                          <ExpandableText 
+                            text={line.budgetLineName} 
+                            lineId={line.id} 
+                            field="budgetLineName"
+                            maxLength={20}
+                            className="ml-1"
+                            textClassName="text-gray-600"
+                          />
+                        </p>
                       </div>
                       <span className={`text-xs px-2 py-1 rounded-full ${
                         line.engagementRate > 90 ? 'bg-red-100 text-red-800' :
                         line.engagementRate > 75 ? 'bg-orange-100 text-orange-800' :
                         'bg-green-100 text-green-800'
                       }`}>
-                        {line.engagementRate.toFixed(1)}%
+                        {line.engagementRate.toFixed(2)}%
                       </span>
                     </div>
                     
@@ -755,7 +929,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                         <p className="font-medium">{formatCurrency(line.engagedAmount, line.grantCurrency)}</p>
                       </div>
                       <div>
-                        <span className="text-gray-600">Décaissé:</span>
+                        <span className="text-gray-600">Décaissé RÉEL:</span>
                         <p className="font-medium text-blue-600">{formatCurrency(line.spentAmount, line.grantCurrency)}</p>
                       </div>
                       <div>
@@ -767,7 +941,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                     </div>
                     
                     <div className="flex justify-between items-center mt-2">
-                      <span className="text-xs text-gray-500">Taux décaissé: {line.spentRate.toFixed(1)}%</span>
+                      <span className="text-xs text-gray-500">Taux décaissé: {line.spentRate.toFixed(2)}%</span>
                       {canViewDetails && (
                         <button
                           onClick={() => onViewEngagements(line.id)}
@@ -813,7 +987,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                       </th>
                       <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('spentAmount')}>
                         <div className="flex items-center justify-end space-x-1">
-                          <span>Décaissé</span>
+                          <span>Décaissé RÉEL</span>
                           <SortIcon field="spentAmount" />
                         </div>
                       </th>
@@ -844,11 +1018,29 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                     {paginatedData.map(line => (
                       <tr key={line.id} className="hover:bg-gray-50">
                         <td className="px-3 py-2 max-w-[120px]">
-                          <div className="text-sm font-medium text-gray-900 truncate" title={line.name}>{line.name}</div>
+                          <div className="text-sm font-medium text-gray-900">
+                            <ExpandableText 
+                              text={line.name} 
+                              lineId={line.id} 
+                              field="name"
+                              maxLength={30}
+                              textClassName="font-medium text-gray-900"
+                            />
+                          </div>
                         </td>
-                        <td className="px-3 py-2"><div className="text-xs text-gray-500">{line.code}</div></td>
+                        <td className="px-3 py-2">
+                          <div className="text-xs text-gray-500">{line.code}</div>
+                        </td>
                         <td className="px-3 py-2 max-w-[100px]">
-                          <div className="text-sm text-gray-900 truncate" title={line.budgetLineName}>{line.budgetLineName}</div>
+                          <div className="text-sm text-gray-900">
+                            <ExpandableText 
+                              text={line.budgetLineName} 
+                              lineId={line.id} 
+                              field="budgetLineName"
+                              maxLength={25}
+                              textClassName="text-gray-900"
+                            />
+                          </div>
                         </td>
                         <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">{formatCurrency(line.notifiedAmount, line.grantCurrency)}</td>
                         <td className="px-3 py-2 text-right text-sm text-gray-900">{formatCurrency(line.engagedAmount, line.grantCurrency)}</td>
@@ -858,12 +1050,12 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                         </td>
                         <td className="px-3 py-2 text-center">
                           <span className={`text-xs font-medium ${getEngagementColor(line.engagementRate)}`}>
-                            {line.engagementRate.toFixed(1)}%
+                            {line.engagementRate.toFixed(2)}%
                           </span>
                         </td>
                         <td className="px-3 py-2 text-center">
                           <span className={`text-xs font-medium ${getEngagementColor(line.spentRate)}`}>
-                            {line.spentRate.toFixed(1)}%
+                            {line.spentRate.toFixed(2)}%
                           </span>
                         </td>
                         {canViewDetails && (
@@ -956,8 +1148,8 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                     <span className="text-sm font-medium text-gray-900 truncate">{budgetLine.name}</span>
                   </div>
                   <div className="text-right flex-shrink-0 ml-2">
-                    <span className="text-xs text-gray-600 block">Engagé: {budgetLine.engagementRate.toFixed(1)}%</span>
-                    <span className="text-xs text-gray-500">Décaissé: {budgetLine.spentRate.toFixed(1)}%</span>
+                    <span className="text-xs text-gray-600 block">Engagé: {budgetLine.engagementRate.toFixed(2)}%</span>
+                    <span className="text-xs text-gray-500">Décaissé: {budgetLine.spentRate.toFixed(2)}%</span>
                   </div>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-1.5">
@@ -993,8 +1185,8 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                       <p className="text-xs text-gray-600 truncate">{line.code}</p>
                     </div>
                     <div className="text-right flex-shrink-0 ml-2">
-                      <p className="font-semibold text-orange-600 text-sm">{engagementRate.toFixed(1)}% engagé</p>
-                      <p className="text-xs text-gray-600">{spentRate.toFixed(1)}% décaissé</p>
+                      <p className="font-semibold text-orange-600 text-sm">{engagementRate.toFixed(2)}% engagé</p>
+                      <p className="text-xs text-gray-600">{spentRate.toFixed(2)}% décaissé</p>
                     </div>
                   </div>
                 </div>

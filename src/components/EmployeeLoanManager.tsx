@@ -230,6 +230,10 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const canApprove = hasPermission('employee_loans', 'approve');
   const canAddRepayment = hasPermission('employee_loans', 'add_repayment');
 
+  // Vérifier si la subvention sélectionnée est active
+  const activeGrant = grants.find(grant => grant.status === 'active');
+  const canCreateLoan = canCreate && activeGrant;
+
   // Récupération des données utilisateur
   const userProfession = getUserProfession();
   const userFullName = getUserFullName();
@@ -802,6 +806,12 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
+    // 🎯 VÉRIFICATION SUBVENTION ACTIVE
+    if (!activeGrant) {
+      showWarning('Subvention inactive', 'Impossible de créer un prêt employé car la subvention n\'est pas active');
+      return;
+    }
+
     if (!canCreate && !editingLoan) {
       showWarning('Permission refusée', 'Vous n\'avez pas la permission de créer des prêts');
       return;
@@ -1011,7 +1021,12 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
           {canCreate && (
             <button
               onClick={() => setShowForm(true)}
-              className="bg-gradient-to-r from-green-600 to-blue-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
+              disabled={!canCreateLoan}
+              className={`px-4 py-2 rounded-xl font-medium transition-all duration-200 flex items-center space-x-2 ${
+                canCreateLoan
+                  ? 'bg-gradient-to-r from-green-600 to-blue-600 text-white hover:shadow-lg transform hover:scale-[1.02]'
+                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              }`}
             >
               <Plus className="w-4 h-4" />
               <span>Nouveau Prêt</span>

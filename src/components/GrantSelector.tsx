@@ -1,5 +1,5 @@
-import React from 'react';
-import { Settings, ChevronDown } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Settings, ChevronDown, Search, X } from 'lucide-react';
 import { Grant } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
@@ -9,19 +9,78 @@ interface GrantSelectorProps {
   onSelectGrant: (grantId: string) => void;
 }
 
+
+// Dans GrantSelectorComponent, simplifiez le code :
+
 const GrantSelectorComponent: React.FC<GrantSelectorProps> = ({
   grants,
   selectedGrantId,
   onSelectGrant,
 }) => {
   const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
+  const [isDataReady, setIsDataReady] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+
+  // Attendre que les données soient prêtes
+  useEffect(() => {
+    if (grants.length > 0 && selectedGrantId) {
+      setIsDataReady(true);
+    }
+  }, [grants, selectedGrantId]);
 
   // Vérification des permissions
   const canView = hasPermission('globalConfig', 'view');
   const canEdit = hasPermission('globalConfig', 'edit');
 
-  // Loading state
-  if (permissionsLoading) {
+  // 🎯 FILTRAGE DES SUBVENTIONS POUR LA RECHERCHE
+  const filteredGrants = useMemo(() => {
+    if (!searchTerm) return grants;
+    
+    return grants.filter(grant =>
+      grant.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      grant.reference.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      grant.grantingOrganization.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      grant.year.toString().includes(searchTerm)
+    );
+  }, [grants, searchTerm]);
+
+  // Gestionnaire de sélection de subvention - SIMPLIFIÉ
+  const handleGrantSelect = (grantId: string) => {
+  if (canEdit) {
+    console.log('🎯 Grant selected in component:', grantId);
+    onSelectGrant(grantId); // Cette fonction doit être handleSelectGrant de App.tsx
+    setIsDropdownOpen(false);
+    setSearchTerm('');
+  }
+};
+
+  // Gestionnaire de recherche
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(e.target.value);
+  };
+
+  // Effacer la recherche
+  const clearSearch = () => {
+    setSearchTerm('');
+  };
+
+  // Fermer le dropdown quand on clique en dehors
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.grant-selector-dropdown')) {
+        setIsDropdownOpen(false);
+        setSearchTerm('');
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Loading state combiné
+  if (permissionsLoading || !isDataReady) {
     return (
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
         <div className="flex items-center space-x-3 mb-4">
@@ -33,6 +92,7 @@ const GrantSelectorComponent: React.FC<GrantSelectorProps> = ({
             <div className="h-3 bg-gray-200 rounded w-2/3 animate-pulse"></div>
           </div>
         </div>
+        <div className="h-10 bg-gray-200 rounded animate-pulse"></div>
       </div>
     );
   }
@@ -61,12 +121,6 @@ const GrantSelectorComponent: React.FC<GrantSelectorProps> = ({
 
   const selectedGrant = grants.find(grant => grant.id === selectedGrantId);
 
-  const handleGrantChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    if (canEdit) {
-      onSelectGrant(e.target.value);
-    }
-  };
-
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6">
       <div className="flex items-center space-x-3 mb-4">
@@ -75,35 +129,132 @@ const GrantSelectorComponent: React.FC<GrantSelectorProps> = ({
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="text-lg font-semibold text-gray-900 truncate">Configuration Globale</h3>
-          <p className="text-sm text-gray-600 truncate">Sélectionnez la subvention active pour toute l'équipe</p>
+          <p className="text-sm text-gray-600 truncate">
+            {selectedGrant 
+              ? `Subvention active: ${selectedGrant.name}`
+              : 'Sélectionnez la subvention active pour toute l\'équipe'
+            }
+          </p>
         </div>
       </div>
 
       <div className="space-y-4">
-        <div>
+        <div className="grant-selector-dropdown">
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Subvention Active *
           </label>
+          
+          {/* 🎯 SELECT PERSONNALISÉ AVEC RECHERCHE */}
           <div className="relative">
-            <select
-              value={selectedGrantId}
-              onChange={handleGrantChange}
+            {/* Bouton d'affichage de la valeur sélectionnée */}
+            <button
+              type="button"
+              onClick={() => canEdit && setIsDropdownOpen(!isDropdownOpen)}
               disabled={!canEdit}
               className={`
-                w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent appearance-none bg-white pr-10
-                ${!canEdit ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'cursor-pointer'}
-                transition-colors duration-200
+                w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent 
+                text-left pr-10 flex items-center justify-between transition-all duration-200
+                ${!canEdit 
+                  ? 'bg-gray-100 text-gray-500 cursor-not-allowed' 
+                  : 'bg-white hover:border-gray-400 cursor-pointer'
+                }
+                ${isDropdownOpen ? 'border-blue-500 ring-2 ring-blue-100' : ''}
               `}
             >
-              <option value="">Sélectionner une subvention</option>
-              {grants.map(grant => (
-                <option key={grant.id} value={grant.id}>
-                  {grant.name} ({grant.reference}) - {grant.year}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+              <span className="truncate">
+                {selectedGrant 
+                  ? `${selectedGrant.name} (${selectedGrant.reference}) - ${selectedGrant.year}`
+                  : 'Sélectionner une subvention'
+                }
+              </span>
+              <ChevronDown 
+                className={`w-5 h-5 text-gray-400 transition-transform duration-200 ${
+                  isDropdownOpen ? 'transform rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {/* Dropdown avec recherche */}
+            {isDropdownOpen && canEdit && (
+              <div className="absolute z-50 w-full mt-2 bg-white border border-gray-300 rounded-xl shadow-lg max-h-80 overflow-hidden">
+                {/* Barre de recherche */}
+                <div className="p-3 border-b border-gray-200">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      value={searchTerm}
+                      onChange={handleSearchChange}
+                      placeholder="Rechercher une subvention..."
+                      className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                      autoFocus
+                    />
+                    {searchTerm && (
+                      <button
+                        onClick={clearSearch}
+                        className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Liste des résultats */}
+                <div className="max-h-60 overflow-y-auto">
+                  {filteredGrants.length === 0 ? (
+                    <div className="px-4 py-3 text-center text-gray-500 text-sm">
+                      {searchTerm ? 'Aucune subvention trouvée' : 'Aucune subvention disponible'}
+                    </div>
+                  ) : (
+                    <div className="py-1">
+                      {filteredGrants.map((grant) => (
+                        <button
+                          key={grant.id}
+                          onClick={() => handleGrantSelect(grant.id)}
+                          className={`
+                            w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors duration-150 border-b border-gray-100 last:border-b-0
+                            ${grant.id === selectedGrantId ? 'bg-blue-50 border-blue-200' : ''}
+                          `}
+                        >
+                          <div className="flex flex-col space-y-1">
+                            <div className="flex items-start justify-between">
+                              <span className="font-medium text-gray-900 text-sm truncate">
+                                {grant.name}
+                              </span>
+                              <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full ml-2 flex-shrink-0">
+                                {grant.year}
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-600 truncate">
+                              {grant.reference} • {grant.grantingOrganization}
+                            </div>
+                            <div className="text-xs font-medium text-blue-600">
+                              {grant.totalAmount.toLocaleString('fr-FR', { 
+                                style: 'currency', 
+                                currency: grant.currency === 'XOF' ? 'XOF' : grant.currency,
+                                maximumFractionDigits: 0
+                              })}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Indicateur de résultats */}
+                {searchTerm && (
+                  <div className="px-4 py-2 border-t border-gray-200 bg-gray-50">
+                    <p className="text-xs text-gray-500">
+                      {filteredGrants.length} subvention{filteredGrants.length > 1 ? 's' : ''} trouvée{filteredGrants.length > 1 ? 's' : ''}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
+
           <p className="text-xs text-gray-500 mt-1">
             Cette subvention sera utilisée dans tous les modules pour toute l'équipe
           </p>
@@ -146,6 +297,23 @@ const GrantSelectorComponent: React.FC<GrantSelectorProps> = ({
                     year: 'numeric' 
                   })}
                 </p>
+              </div>
+            </div>
+
+            {/* Informations supplémentaires */}
+            <div className="mt-3 pt-3 border-t border-blue-200">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-blue-600">Statut:</span>
+                <span className={`px-2 py-1 rounded-full font-medium ${
+                  selectedGrant.status === 'active' ? 'bg-green-100 text-green-800' :
+                  selectedGrant.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                  selectedGrant.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+                  'bg-red-100 text-red-800'
+                }`}>
+                  {selectedGrant.status === 'active' ? 'Active' :
+                   selectedGrant.status === 'pending' ? 'En attente' :
+                   selectedGrant.status === 'completed' ? 'Terminée' : 'Suspendue'}
+                </span>
               </div>
             </div>
           </div>

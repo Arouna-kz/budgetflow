@@ -1,9 +1,8 @@
-// hooks/useEmployeeLoanNotifications.ts
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from './useAuth';
 import { EmployeeLoan } from '../types';
 
-export const useEmployeeLoanNotifications = (loans: EmployeeLoan[]) => {
+export const useEmployeeLoanNotifications = (loans: EmployeeLoan[], selectedGrantId?: string) => {
   const { userProfile } = useAuth();
   const [pendingSignatures, setPendingSignatures] = useState<EmployeeLoan[]>([]);
   const [notificationCount, setNotificationCount] = useState(0);
@@ -15,7 +14,12 @@ export const useEmployeeLoanNotifications = (loans: EmployeeLoan[]) => {
   const getPendingSignatures = useCallback((): EmployeeLoan[] => {
     const userProfession = getUserProfession();
     
-    return loans.filter(loan => {
+    // Filtrer d'abord par subvention si spécifiée
+    const filteredLoans = selectedGrantId 
+      ? loans.filter(loan => loan.grantId === selectedGrantId)
+      : loans;
+    
+    return filteredLoans.filter(loan => {
       if (userProfession === 'Coordinateur de la Subvention') {
         return !loan.approvals?.supervisor1?.signature;
       } else if (userProfession === 'Comptable') {
@@ -28,7 +32,7 @@ export const useEmployeeLoanNotifications = (loans: EmployeeLoan[]) => {
       }
       return false;
     });
-  }, [loans, getUserProfession]);
+  }, [loans, getUserProfession, selectedGrantId]);
 
   useEffect(() => {
     const pending = getPendingSignatures();

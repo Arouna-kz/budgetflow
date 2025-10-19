@@ -1,44 +1,49 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Banknote, TrendingUp, TrendingDown, AlertCircle, CheckCircle } from 'lucide-react';
 import { showSuccess, showValidationError, confirmDelete, showError } from '../utils/alerts';
-import { Payment, BankAccount, BankTransaction, PAYMENT_STATUS, Grant } from '../types';
+import { Payment, BankTransaction, PAYMENT_STATUS, Grant } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
 interface TreasuryManagerProps {
   payments: Payment[];
-  bankAccounts: BankAccount[];
   bankTransactions: BankTransaction[];
   selectedGrant?: Grant;
-  onDeleteBankAccount: (id: string) => void;
   onAddBankTransaction: (transaction: Omit<BankTransaction, 'id'>) => void;
-  onUpdateBankAccount: (id: string, updates: Partial<BankAccount>) => void;
+  onUpdateGrant: (id: string, updates: Partial<Grant>) => void;
 }
 
 const TreasuryManager: React.FC<TreasuryManagerProps> = ({
   payments,
-  bankAccounts,
   bankTransactions,
   selectedGrant,
-  onDeleteBankAccount,
   onAddBankTransaction,
-  onUpdateBankAccount
+  onUpdateGrant
 }) => {
-  // 1. TOUS les hooks doivent être appelés AVANT toute logique conditionnelle
   const [showTransactionForm, setShowTransactionForm] = useState(false);
   
   // Vérification des permissions
   const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
   
-  // Filtrer les comptes bancaires pour n'afficher que celui de la subvention active
-  const filteredBankAccounts = selectedGrant && selectedGrant.bankAccount 
-    ? bankAccounts.filter(account => account.name === selectedGrant.bankAccount?.name)
-    : bankAccounts;
+  // Utiliser directement le compte bancaire de la subvention sélectionnée
+  const grantBankAccount = selectedGrant?.bankAccount;
+
+  // Créer un objet compte bancaire virtuel pour la subvention
+  const virtualBankAccount = grantBankAccount ? {
+    id: `grant-${selectedGrant?.id}`,
+    name: grantBankAccount.name,
+    bankName: grantBankAccount.bankName,
+    accountNumber: grantBankAccount.accountNumber,
+    balance: grantBankAccount.balance || 0,
+    currency: selectedGrant?.currency || 'EUR',
+    lastUpdateDate: grantBankAccount.lastUpdateDate || new Date().toISOString()
+  } : null;
+
+  const filteredBankAccounts = virtualBankAccount ? [virtualBankAccount] : [];
 
   // Initialiser le formulaire avec le compte de la subvention si disponible
   const getInitialAccountId = () => {
-    if (selectedGrant?.bankAccount) {
-      const account = bankAccounts.find(acc => acc.name === selectedGrant.bankAccount?.name);
-      return account?.id || '';
+    if (grantBankAccount && selectedGrant) {
+      return `grant-${selectedGrant.id}`;
     }
     return '';
   };
@@ -54,7 +59,7 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
 
   // Mettre à jour accountId quand selectedGrant change
   useEffect(() => {
-    if (selectedGrant) {
+    if (selectedGrant && selectedGrant.bankAccount) {
       setTransactionFormData(prev => ({
         ...prev,
         accountId: `grant-${selectedGrant.id}`
@@ -62,7 +67,25 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
     }
   }, [selectedGrant]);
 
-  // 2. MAINTENANT nous pouvons faire la vérification conditionnelle
+  // Fonction pour mettre à jour le solde du compte bancaire de la subvention
+  const updateGrantBankAccountBalance = (amount: number, type: 'credit' | 'debit') => {
+    if (!selectedGrant || !selectedGrant.bankAccount) return;
+
+    const currentBalance = selectedGrant.bankAccount.balance || 0;
+    const newBalance = type === 'credit' 
+      ? currentBalance + amount 
+      : currentBalance - amount;
+
+    // Mettre à jour la subvention avec le nouveau solde
+    onUpdateGrant(selectedGrant.id, {
+      bankAccount: {
+        ...selectedGrant.bankAccount,
+        balance: newBalance,
+        lastUpdateDate: new Date().toISOString()
+      }
+    });
+  };
+
   if (permissionsLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -89,8 +112,9 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
   // Définition des permissions spécifiques au module
   const canView = hasPermission('treasury', 'view');
   const canCreate = hasPermission('treasury', 'create');
-  const canDelete = hasPermission('treasury', 'delete');
-  const canManageAccounts = hasPermission('treasury', 'manage_accounts');
+
+  // Vérifier si la subvention sélectionnée est active
+  const canCreateTreasury = canCreate && selectedGrant && selectedGrant.status === 'active';
 
   // Fonction pour formater les montants avec la devise de la subvention active
   const formatCurrency = (amount: number) => {
@@ -138,20 +162,29 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       return;
     }
 
-    onAddBankTransaction({
+    const amount = parseFloat(transactionFormData.amount);
+    const transactionData = {
       accountId: transactionFormData.accountId,
       date: transactionFormData.date,
       description: transactionFormData.description.trim(),
-      amount: parseFloat(transactionFormData.amount),
+      amount: amount,
       type: transactionFormData.type,
       reference: transactionFormData.reference.trim()
-    });
+    };
+
+    // Ajouter la transaction
+    onAddBankTransaction(transactionData);
+
+    // Mettre à jour le solde du compte bancaire de la subvention
+    if (transactionFormData.accountId.startsWith('grant-') && selectedGrant) {
+      updateGrantBankAccountBalance(amount, transactionFormData.type);
+    }
 
     showSuccess('Transaction ajoutée', 'La transaction a été ajoutée avec succès');
     resetTransactionForm();
   };
 
-  // Calculs pour l'état de trésorerie - utiliser filteredBankAccounts
+  // Calculs pour l'état de trésorerie
   const totalBankBalance = filteredBankAccounts.reduce((sum, account) => sum + account.balance, 0);
   const validatedPayments = payments.filter(payment => payment.status === 'approved' || payment.status === 'paid');
   const totalValidatedPayments = validatedPayments.reduce((sum, payment) => sum + payment.amount, 0);
@@ -162,7 +195,6 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
     return bankTransactions.filter(transaction => transaction.accountId === accountId);
   };
 
-  // Si l'utilisateur n'a pas la permission de view, on n'affiche que le message d'accès refusé
   if (!canView) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -187,7 +219,13 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
           {canCreate && (
             <button
               onClick={() => setShowTransactionForm(true)}
-              className="bg-green-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-green-700 transition-colors flex items-center space-x-2"
+              disabled={!canCreateTreasury}
+              className={`px-4 py-2 rounded-xl font-medium transition-all duration-200 flex items-center space-x-2 ${
+                canCreateTreasury
+                  ? 'bg-gradient-to-r from-green-600 to-blue-600 text-white hover:shadow-lg transform hover:scale-[1.02]'
+                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              }`}
+              // className="bg-green-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-green-700 transition-colors flex items-center space-x-2"
             >
               <Plus className="w-4 h-4" />
               <span>Transaction</span>
@@ -203,9 +241,9 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
             <div>
               <h3 className="text-sm font-semibold text-gray-900">Subvention Active</h3>
               <p className="text-sm text-gray-600">{selectedGrant.name}</p>
-              {selectedGrant.bankAccount && (
+              {grantBankAccount && (
                 <p className="text-sm text-gray-500">
-                  Compte: {selectedGrant.bankAccount.name} - {selectedGrant.bankAccount.bankName}
+                  Compte: {grantBankAccount.name} - {grantBankAccount.bankName}
                 </p>
               )}
             </div>
@@ -256,7 +294,7 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
               <p className="text-sm font-medium text-gray-600">Comptes Bancaires</p>
               <p className="text-2xl font-bold text-purple-600">{filteredBankAccounts.length}</p>
               <p className="text-sm text-gray-500">
-                {selectedGrant ? 'Compte de la subvention' : 'Tous les comptes'}
+                {selectedGrant ? 'Compte de la subvention' : 'Aucun compte'}
               </p>
             </div>
             <div className="p-3 bg-purple-100 rounded-full">
@@ -267,7 +305,7 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-1 gap-6">
-        {/* Comptes Bancaires - utiliser filteredBankAccounts */}
+        {/* Comptes Bancaires */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">
             {selectedGrant ? 'Compte Bancaire de la Subvention' : 'Comptes Bancaires'}
@@ -297,7 +335,7 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                   
                   {recentTransactions.length > 0 && (
                     <div className="border-t border-gray-200 pt-3">
-                      <p className="text-xs font-medium text-gray-600 mb-2">Montant sur les relevés non encore enregistrés à la cellule</p>
+                      <p className="text-xs font-medium text-gray-600 mb-2">Dernières transactions</p>
                       {recentTransactions.map(transaction => (
                         <div key={transaction.id} className="flex items-center justify-between text-xs">
                           <span className="text-gray-600">{transaction.description}</span>
@@ -307,25 +345,6 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                           </span>
                         </div>
                       ))}
-                    </div>
-                  )}
-                  
-                  {!selectedGrant && canManageAccounts && (
-                    <div className="flex space-x-2 mt-3">
-                      {canDelete && (
-                        <button
-                          onClick={() => {
-                            confirmDelete(
-                              'Supprimer le compte',
-                              `Êtes-vous sûr de vouloir supprimer le compte "${account.name}" ?`,
-                              () => onDeleteBankAccount(account.id)
-                            );
-                          }}
-                          className="w-full px-3 py-1 text-sm bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors"
-                        >
-                          Supprimer
-                        </button>
-                      )}
                     </div>
                   )}
                 </div>
@@ -381,11 +400,11 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 my-8 max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              Nouvelle transaction bancaire par Rapprochement bancaire
+              Nouvelle transaction bancaire
             </h3>
             
             {/* Grant and Bank Account Info */}
-            {selectedGrant && selectedGrant.bankAccount && (
+            {selectedGrant && grantBankAccount && (
               <div className="bg-blue-50 rounded-lg p-4 mb-4">
                 <h4 className="font-medium text-blue-900 mb-2">Subvention et Compte Associé</h4>
                 <div className="space-y-1 text-sm">
@@ -395,15 +414,21 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                   </div>
                   <div>
                     <span className="text-blue-700">Compte:</span>
-                    <span className="ml-2 font-medium">{selectedGrant.bankAccount.name}</span>
+                    <span className="ml-2 font-medium">{grantBankAccount.name}</span>
                   </div>
                   <div>
                     <span className="text-blue-700">Banque:</span>
-                    <span className="ml-2 font-medium">{selectedGrant.bankAccount.bankName}</span>
+                    <span className="ml-2 font-medium">{grantBankAccount.bankName}</span>
                   </div>
                   <div>
                     <span className="text-blue-700">Devise:</span>
                     <span className="ml-2 font-medium">{selectedGrant.currency}</span>
+                  </div>
+                  <div>
+                    <span className="text-blue-700">Solde actuel:</span>
+                    <span className="ml-2 font-bold text-blue-600">
+                      {formatCurrency(grantBankAccount.balance || 0)}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -414,28 +439,18 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Compte bancaire *
                 </label>
-                {selectedGrant && selectedGrant.bankAccount ? (
+                {selectedGrant && grantBankAccount ? (
                   <div className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-700">
-                    {selectedGrant.bankAccount.name} - {selectedGrant.bankAccount.bankName}
+                    {grantBankAccount.name} - {grantBankAccount.bankName}
                     <input type="hidden" value={transactionFormData.accountId} />
                   </div>
                 ) : (
-                  <select
-                    value={transactionFormData.accountId}
-                    onChange={(e) => setTransactionFormData(prev => ({ ...prev, accountId: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                  >
-                    <option value="">Sélectionner un compte</option>
-                    {bankAccounts.map(account => (
-                      <option key={account.id} value={account.id}>
-                        {account.name} - {account.bankName}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-500">
+                    Aucun compte bancaire configuré
+                  </div>
                 )}
                 <p className="text-xs text-gray-500 mt-1">
-                  Compte bancaire de la subvention active
+                  {selectedGrant ? 'Compte bancaire de la subvention active' : 'Aucune subvention sélectionnée'}
                 </p>
               </div>
 
@@ -522,7 +537,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                  disabled={!selectedGrant || !grantBankAccount}
+                  className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
                 >
                   Ajouter Transaction
                 </button>

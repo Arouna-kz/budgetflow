@@ -7,8 +7,6 @@ import jsPDF from 'jspdf';
 import { useAuth } from '../hooks/useAuth';
 import { usePermissions } from '../hooks/usePermissions';
 
-
-
 interface PaymentFormProps {
   engagement: Engagement;
   subBudgetLine: SubBudgetLine;
@@ -17,7 +15,7 @@ interface PaymentFormProps {
   bankAccounts: BankAccount[];
   existingPayments: Payment[];
   onSave: (payment: Omit<Payment, 'id'>) => void;
-  onSign: (paymentId: string, updates: Partial<Payment>) => void;0
+  onSign: (paymentId: string, updates: Partial<Payment>) => void;
   onCancel: () => void;
   editingPayment?: Payment | null;
 }
@@ -43,8 +41,7 @@ export default function PaymentForm({
   const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
   const { user: currentUser, userProfile } = useAuth();
 
-
-   // Récupérer les informations de l'utilisateur connecté depuis useAuth
+  // Récupérer les informations de l'utilisateur connecté depuis useAuth
   useEffect(() => {
     if (userProfile) {
       setCurrentUserName(`${userProfile.firstName} ${userProfile.lastName}`);
@@ -52,7 +49,6 @@ export default function PaymentForm({
     }
   }, [userProfile]);
 
- 
   const [formData, setFormData] = useState({
     paymentNumber: '',
     amount: engagement.amount.toString(),
@@ -92,8 +88,6 @@ export default function PaymentForm({
   };
 
   const canSignPayment = (signatureType: string): boolean => {
-    // if (!canViewSignatureSection()) return false;
-
     const currentApprovals = approvals;
     
     // Vérification basée sur la profession et le type de signature
@@ -121,7 +115,43 @@ export default function PaymentForm({
     return true;
   };
 
-   const handleSignPayment = (signatureType: string) => {
+  // 🎯 NOUVELLE FONCTION : Pour signer un nouveau paiement (création)
+  const handleSignNewPayment = (signatureType: string) => {
+    const userProfession = currentUserProfession;
+    const userName = currentUserName;
+    
+    // Vérifier que l'utilisateur peut signer (Coordonnateur National ne peut pas signer en création)
+    if (signatureType === 'finalApproval') {
+      showWarning('Signature impossible', 'Le Coordonnateur National ne peut pas signer lors de la création d\'un paiement');
+      return;
+    }
+    
+    if (!userName) {
+      showWarning('Nom manquant', 'Impossible de signer sans nom d\'utilisateur');
+      return;
+    }
+    
+    // Mettre à jour les approbations avec la signature
+    setApprovals(prev => ({
+      ...prev,
+      [signatureType]: {
+        name: userName,
+        signature: true,
+        observation: prev[signatureType as keyof typeof prev].observation,
+        date: new Date().toISOString().split('T')[0]
+      }
+    }));
+    
+    showSuccess('Signature préparée', 'Votre signature sera enregistrée avec le nouveau paiement');
+  };
+
+  // 🎯 FONCTION MODIFIÉE : Pour signer un paiement existant (édition)
+  const handleSignExistingPayment = (signatureType: string) => {
+    if (!editingPayment || !editingPayment.id) {
+      showWarning('Erreur', 'Paiement non trouvé pour la signature');
+      return;
+    }
+
     if (!canSignPayment(signatureType)) {
       if (signatureType === 'finalApproval') {
         showWarning('Signature impossible', 'Les signatures du Coordinateur de la Subvention et du Comptable sont requises avant votre signature');
@@ -146,16 +176,19 @@ export default function PaymentForm({
     // Mettre à jour l'état local pour un retour visuel immédiat
     setApprovals(newApprovalsState);
 
-    // Si c'est un paiement existant, enregistrer la signature immédiatement
-    if (editingPayment && editingPayment.id) {
-      onSign(editingPayment.id, { approvals: newApprovalsState });
-      showSuccess('Signature enregistrée !');
-    } else {
-      // Pour un nouveau paiement, la signature reste en attente de soumission
-      showSuccess('Signature préparée', 'Elle sera enregistrée avec le paiement.');
-    }
+    // Enregistrer la signature immédiatement pour un paiement existant
+    onSign(editingPayment.id, { approvals: newApprovalsState });
+    showSuccess('Signature enregistrée !');
   };
 
+  // 🎯 FONCTION UNIFIÉE : Gère à la fois création et modification
+  const handleSignPayment = (signatureType: string) => {
+    if (editingPayment) {
+      handleSignExistingPayment(signatureType);
+    } else {
+      handleSignNewPayment(signatureType);
+    }
+  };
 
   const toggleObservation = (signatureType: string) => {
     setShowObservations(prev => ({
@@ -196,8 +229,7 @@ export default function PaymentForm({
       setFormData(prev => ({ ...prev, paymentNumber }));
       
       // Auto-remplir le nom de l'utilisateur connecté dans les signatures correspondantes
-      // if (currentUserName && canViewSignatureSection()) {
-      if (currentUserName ) {
+      if (currentUserName && canViewSignatureSection()) {
         if (currentUserProfession === 'Coordinateur de la Subvention') {
           setApprovals(prev => ({
             ...prev,
@@ -208,12 +240,8 @@ export default function PaymentForm({
             ...prev,
             supervisor2: { ...prev.supervisor2, name: currentUserName }
           }));
-        } else if (currentUserProfession === 'Coordonnateur National') {
-          setApprovals(prev => ({
-            ...prev,
-            finalApproval: { ...prev.finalApproval, name: currentUserName }
-          }));
         }
+        // Note: Le Coordonnateur National n'est PAS auto-rempli lors de la création
       }
     }
   }, [editingPayment, engagement, currentUserName, currentUserProfession]);
@@ -253,6 +281,41 @@ export default function PaymentForm({
       return;
     }
 
+    // 🎯 MODIFICATION IMPORTANTE : Préparation des données d'approbation
+    // Pour les NOUVEAUX paiements, on enregistre seulement les signatures validées
+    const approvalData: any = {};
+    
+    // Coordinateur de la Subvention - enregistré seulement si signé
+    if (approvals.supervisor1.signature && approvals.supervisor1.name) {
+      approvalData.supervisor1 = {
+        name: approvals.supervisor1.name,
+        date: new Date().toISOString().split('T')[0],
+        signature: true,
+        observation: approvals.supervisor1.observation
+      };
+    }
+    
+    // Comptable - enregistré seulement si signé
+    if (approvals.supervisor2.signature && approvals.supervisor2.name) {
+      approvalData.supervisor2 = {
+        name: approvals.supervisor2.name,
+        date: new Date().toISOString().split('T')[0],
+        signature: true,
+        observation: approvals.supervisor2.observation
+      };
+    }
+    
+    // Coordonnateur National - NE PEUT PAS signer lors de l'ajout
+    // Pour les nouveaux paiements, on n'enregistre JAMAIS le Coordonnateur National
+    if (editingPayment && approvals.finalApproval.signature && approvals.finalApproval.name) {
+      approvalData.finalApproval = {
+        name: approvals.finalApproval.name,
+        date: new Date().toISOString().split('T')[0],
+        signature: true,
+        observation: approvals.finalApproval.observation
+      };
+    }
+
     const payment: Omit<Payment, 'id'> = {
       paymentNumber: formData.paymentNumber,
       engagementId: engagement.id,
@@ -274,26 +337,7 @@ export default function PaymentForm({
       serviceAcceptance: formData.serviceAcceptance,
       controlNotes: formData.controlNotes || undefined,
       status: 'pending',
-      approvals: {
-        supervisor1: approvals.supervisor1.name ? {
-          name: approvals.supervisor1.name,
-          date: new Date().toISOString().split('T')[0],
-          signature: approvals.supervisor1.signature,
-          observation: approvals.supervisor1.observation || undefined
-        } : undefined,
-        supervisor2: approvals.supervisor2.name ? {
-          name: approvals.supervisor2.name,
-          date: new Date().toISOString().split('T')[0],
-          signature: approvals.supervisor2.signature,
-          observation: approvals.supervisor2.observation || undefined
-        } : undefined,
-        finalApproval: approvals.finalApproval.name ? {
-          name: approvals.finalApproval.name,
-          date: new Date().toISOString().split('T')[0],
-          signature: approvals.finalApproval.signature,
-          observation: approvals.finalApproval.observation || undefined
-        } : undefined
-      }
+      approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined
     };
 
     onSave(payment);
@@ -384,11 +428,16 @@ export default function PaymentForm({
   const generateMainPDFContent = () => {
     return `
       <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px;">
-        <!-- Header -->
-        <div style="text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #2c5aa0;">
-          <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px;">FICHE DE PAIEMENT</h1>
-          <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${formData.paymentNumber}</h2>
-          <p>Date: ${new Date(formData.date).toLocaleDateString('fr-FR')}</p>
+        <!-- Header avec Logo -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #2c5aa0;">
+          <div style="flex: 1;">
+            <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px;">FICHE DE PAIEMENT</h1>
+            <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${formData.paymentNumber}</h2>
+            <p>Date: ${new Date(formData.date).toLocaleDateString('fr-FR')}</p>
+          </div>
+          <div style="width: 80px; height: 32px;">
+            <img src="/budgetbase/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
+          </div>
         </div>
         
         <!-- Informations de l'Engagement -->
@@ -595,9 +644,15 @@ export default function PaymentForm({
   const generateSignaturePDFContent = () => {
     return `
       <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; padding-top: 50px;">
-        <div style="text-align: center; margin-bottom: 30px;">
-          <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px;">SIGNATURES D'APPROBATION</h1>
-          <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${formData.paymentNumber}</h2>
+        <!-- Header avec Logo -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+          <div style="flex: 1;">
+            <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px;">SIGNATURES D'APPROBATION</h1>
+            <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${formData.paymentNumber}</h2>
+          </div>
+          <div style="width: 80px; height: 32px;">
+            <img src="/budgetbase/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
+          </div>
         </div>
         
         <!-- Signatures -->
@@ -1026,11 +1081,16 @@ export default function PaymentForm({
           </div>
 
           {/* Signatures Section */}
-          {/* {canViewSignatureSection() && ( */}
+          {canViewSignatureSection() && (
             <div className="bg-yellow-50 rounded-xl p-6 border border-yellow-200">
               <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
                 <User className="w-5 h-5 mr-2" />
                 Signatures d'Approbation
+                {!editingPayment && (
+                  <span className="ml-2 text-sm font-normal text-blue-600 bg-blue-100 px-2 py-1 rounded">
+                    Mode création
+                  </span>
+                )}
               </h3>
               
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1048,18 +1108,25 @@ export default function PaymentForm({
                       </button>
                     )}
                   </div>
-                  <input
-                    type="text"
-                    value={currentUserProfession === 'Coordinateur de la Subvention' && !approvals.supervisor1.name ? currentUserName : approvals.supervisor1.name}
-                    onChange={(e) => setApprovals(prev => ({
-                      ...prev,
-                      supervisor1: { ...prev.supervisor1, name: e.target.value }
-                    }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                    disabled
-                  />
                   
-                  <div className="flex items-center justify-between">
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-600 mb-1">Nom du signataire</label>
+                    <input
+                      type="text"
+                      value={approvals.supervisor1.name}
+                      onChange={(e) => !editingPayment && setApprovals(prev => ({
+                        ...prev,
+                        supervisor1: { ...prev.supervisor1, name: e.target.value }
+                      }))}
+                      className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                        editingPayment || approvals.supervisor1.signature ? 'bg-gray-100' : ''
+                      }`}
+                      disabled={editingPayment || approvals.supervisor1.signature}
+                      placeholder={currentUserProfession === 'Coordinateur de la Subvention' ? currentUserName : "Nom du coordinateur"}
+                    />
+                  </div>
+                  
+                  <div className="flex items-center justify-between mb-3">
                     <label className="flex items-center space-x-2">
                       <input
                         type="checkbox"
@@ -1069,9 +1136,11 @@ export default function PaymentForm({
                           supervisor1: { ...prev.supervisor1, signature: e.target.checked }
                         }))}
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                        disabled={currentUserProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
+                        disabled={true} // La case est gérée par le bouton "Signer"
                       />
-                      <span className="text-sm text-gray-700">Signature validée</span>
+                      <span className="text-sm text-gray-700">
+                        {approvals.supervisor1.signature ? '✅ Signature validée' : 'Signature en attente'}
+                      </span>
                     </label>
                     
                     <button
@@ -1092,12 +1161,25 @@ export default function PaymentForm({
                           ...prev,
                           supervisor1: { ...prev.supervisor1, observation: e.target.value }
                         }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                         rows={3}
                         placeholder="Saisissez votre observation..."
-                        disabled={currentUserProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
-
+                        disabled={approvals.supervisor1.signature}
                       />
+                      <p className="text-xs text-gray-500 mt-1">
+                        {approvals.supervisor1.signature 
+                          ? "Observation verrouillée après signature" 
+                          : "Cette observation sera enregistrée avec votre signature"
+                        }
+                      </p>
+                    </div>
+                  )}
+                  
+                  {approvals.supervisor1.signature && (
+                    <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
+                      <p className="text-xs text-green-700">
+                        ✅ Prêt à être signé avec le paiement
+                      </p>
                     </div>
                   )}
                 </div>
@@ -1116,18 +1198,25 @@ export default function PaymentForm({
                       </button>
                     )}
                   </div>
-                  <input
-                    type="text"
-                    value={currentUserProfession === 'Comptable' && !approvals.supervisor2.name ? currentUserName : approvals.supervisor2.name}
-                    onChange={(e) => setApprovals(prev => ({
-                      ...prev,
-                      supervisor2: { ...prev.supervisor2, name: e.target.value }
-                    }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                    disabled
-                  />
                   
-                  <div className="flex items-center justify-between">
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-600 mb-1">Nom du signataire</label>
+                    <input
+                      type="text"
+                      value={approvals.supervisor2.name}
+                      onChange={(e) => !editingPayment && setApprovals(prev => ({
+                        ...prev,
+                        supervisor2: { ...prev.supervisor2, name: e.target.value }
+                      }))}
+                      className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                        editingPayment || approvals.supervisor2.signature ? 'bg-gray-100' : ''
+                      }`}
+                      disabled={editingPayment || approvals.supervisor2.signature}
+                      placeholder={currentUserProfession === 'Comptable' ? currentUserName : "Nom du comptable"}
+                    />
+                  </div>
+                  
+                  <div className="flex items-center justify-between mb-3">
                     <label className="flex items-center space-x-2">
                       <input
                         type="checkbox"
@@ -1137,9 +1226,11 @@ export default function PaymentForm({
                           supervisor2: { ...prev.supervisor2, signature: e.target.checked }
                         }))}
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                        disabled={currentUserProfession !== 'Comptable' || !!approvals.supervisor2.name}
+                        disabled={true}
                       />
-                      <span className="text-sm text-gray-700">Signature validée</span>
+                      <span className="text-sm text-gray-700">
+                        {approvals.supervisor2.signature ? '✅ Signature validée' : 'Signature en attente'}
+                      </span>
                     </label>
                     
                     <button
@@ -1160,11 +1251,25 @@ export default function PaymentForm({
                           ...prev,
                           supervisor2: { ...prev.supervisor2, observation: e.target.value }
                         }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                         rows={3}
                         placeholder="Saisissez votre observation..."
-                        disabled={currentUserProfession !== 'Comptable' || !!approvals.supervisor2.name}
+                        disabled={approvals.supervisor2.signature}
                       />
+                      <p className="text-xs text-gray-500 mt-1">
+                        {approvals.supervisor2.signature 
+                          ? "Observation verrouillée après signature" 
+                          : "Cette observation sera enregistrée avec votre signature"
+                        }
+                      </p>
+                    </div>
+                  )}
+                  
+                  {approvals.supervisor2.signature && (
+                    <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
+                      <p className="text-xs text-green-700">
+                        ✅ Prêt à être signé avec le paiement
+                      </p>
                     </div>
                   )}
                 </div>
@@ -1183,18 +1288,33 @@ export default function PaymentForm({
                       </button>
                     )}
                   </div>
-                  <input
-                    type="text"
-                    value={currentUserProfession === 'Coordonnateur National' && !approvals.finalApproval.name ? currentUserName : approvals.finalApproval.name}
-                    onChange={(e) => setApprovals(prev => ({
-                      ...prev,
-                      finalApproval: { ...prev.finalApproval, name: e.target.value }
-                    }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                    disabled
-                  />
                   
-                  <div className="flex items-center justify-between">
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-600 mb-1">Nom du signataire</label>
+                    <input
+                      type="text"
+                      value={approvals.finalApproval.name}
+                      onChange={(e) => !editingPayment && setApprovals(prev => ({
+                        ...prev,
+                        finalApproval: { ...prev.finalApproval, name: e.target.value }
+                      }))}
+                      className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                        editingPayment || approvals.finalApproval.signature ? 'bg-gray-100' : ''
+                      }`}
+                      disabled={editingPayment || approvals.finalApproval.signature || !editingPayment}
+                      placeholder={currentUserProfession === 'Coordonnateur National' ? currentUserName : "Nom du coordonnateur"}
+                    />
+                  </div>
+                  
+                  {!editingPayment && (
+                    <div className="mb-3 p-2 bg-blue-50 rounded border border-blue-200">
+                      <p className="text-xs text-blue-700">
+                        ℹ️ Le Coordonnateur National ne peut signer qu'après la création du paiement
+                      </p>
+                    </div>
+                  )}
+                  
+                  <div className="flex items-center justify-between mb-3">
                     <label className="flex items-center space-x-2">
                       <input
                         type="checkbox"
@@ -1204,15 +1324,18 @@ export default function PaymentForm({
                           finalApproval: { ...prev.finalApproval, signature: e.target.checked }
                         }))}
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                        disabled={currentUserProfession !== 'Coordonnateur National' || !!approvals.finalApproval.name}
+                        disabled={true}
                       />
-                      <span className="text-sm text-gray-700">Signature validée</span>
+                      <span className="text-sm text-gray-700">
+                        {approvals.finalApproval.signature ? '✅ Signature validée' : 'Signature en attente'}
+                      </span>
                     </label>
                     
                     <button
                       type="button"
                       onClick={() => toggleObservation('finalApproval')}
                       className="text-blue-600 text-sm hover:text-blue-800 flex items-center space-x-1"
+                      disabled={!editingPayment}
                     >
                       <span>Observation</span>
                       {showObservations.finalApproval ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -1227,17 +1350,36 @@ export default function PaymentForm({
                           ...prev,
                           finalApproval: { ...prev.finalApproval, observation: e.target.value }
                         }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                         rows={3}
                         placeholder="Saisissez votre observation..."
-                        disabled={currentUserProfession !== 'Coordonnateur National' || !!approvals.finalApproval.name}
+                        disabled={approvals.finalApproval.signature || !editingPayment}
                       />
+                      <p className="text-xs text-gray-500 mt-1">
+                        {!editingPayment 
+                          ? "Observations disponibles après création" 
+                          : approvals.finalApproval.signature 
+                            ? "Observation verrouillée après signature" 
+                            : "Cette observation sera enregistrée avec votre signature"
+                        }
+                      </p>
                     </div>
                   )}
                 </div>
               </div>
+
+              {/* Information sur le comportement des signatures */}
+              <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                <h4 className="font-medium text-blue-900 mb-2">Comportement des signatures :</h4>
+                <ul className="text-sm text-blue-700 space-y-1">
+                  <li>• <strong>Coordinateur & Comptable</strong> : Peuvent signer dès la création</li>
+                  <li>• <strong>Coordonnateur National</strong> : Ne peut signer qu'après création</li>
+                  <li>• Les noms ne sont enregistrés que si la signature est validée</li>
+                  <li>• Les observations sont verrouillées après signature</li>
+                </ul>
+              </div>
             </div>
-          {/* // )} */}
+          )}
 
           {/* Actions */}
           <div className="flex space-x-4 pt-6">
@@ -1248,22 +1390,6 @@ export default function PaymentForm({
             >
               Annuler
             </button>
-            {/* Bouton de soumission avec contrôle de permission */}
-            {/* {(canEdit && editingPayment) || (canCreate && !editingPayment) ? (
-              <button
-                type="submit"
-                className="flex-1 bg-gradient-to-r from-green-600 to-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center justify-center space-x-2"
-                disabled={!validateForm()} // Optionnel : désactiver si le formulaire n'est pas valide
-              >
-                <Save className="w-5 h-5" />
-                <span>{editingPayment ? 'Modifier' : 'Enregistrer'} le Paiement</span>
-              </button>
-            ) : (
-              <div className="flex-1 px-6 py-3 bg-gray-300 text-gray-500 rounded-xl font-medium text-center">
-                <span>Action non autorisée</span>
-              </div>
-            )} */}
-            {/* {canEdit || canCreate ? ( */}
             <button
               type="submit"
               className="flex-1 bg-gradient-to-r from-green-600 to-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center justify-center space-x-2"
@@ -1271,7 +1397,6 @@ export default function PaymentForm({
               <Save className="w-5 h-5" />
               <span>{editingPayment ? 'Modifier' : 'Enregistrer'} le Paiement</span>
             </button>
-            {/* // )} */}
           </div>
         </form>
       </div>

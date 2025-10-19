@@ -85,10 +85,6 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     setViewingEngagement(null);
   };
 
-  // RÉFÉRENCES POUR PDF
-  const mainContentRef = useRef<HTMLDivElement>(null);
-  const signatureContentRef = useRef<HTMLDivElement>(null);
-
   // 🎯 FONCTIONS UTILITAIRES POUR LES RÔLES ET PERMISSIONS
 
   // Récupère le nom complet de l'utilisateur de manière sécurisée
@@ -118,19 +114,14 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
   // Vérifie si l'utilisateur peut signer un engagement spécifique
   const canSignEngagement = (engagement: Engagement | null, signatureType: string): boolean => {
-    // Vérification de null en premier
+    const userProfession = getUserProfession();
+    
+    // Coordonnateur National ne peut JAMAIS signer lors de l'ajout
     if (!engagement && signatureType === 'finalApproval') {
-      // Pour un nouvel engagement, le Coordonnateur National ne peut jamais signer en premier
       return false;
     }
     
     const currentApprovals = engagement ? engagement.approvals : approvals;
-    
-    if (!currentApprovals) {
-      return false;
-    }
-    
-    const userProfession = getUserProfession();
     
     // Vérification basée sur la profession et le type de signature
     const professionCanSign = 
@@ -141,18 +132,14 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     if (!professionCanSign) return false;
 
     // Vérifie que la signature n'est pas déjà apposée
-    const existingApproval = currentApprovals[signatureType as keyof typeof currentApprovals];
+    const existingApproval = currentApprovals?.[signatureType as keyof typeof currentApprovals];
     if (existingApproval?.signature) return false;
 
-    // Pour le signataire final, vérifier que les deux premiers ont signé
-    if (signatureType === 'finalApproval') {
-      const hasSupervisor1Signed = currentApprovals.supervisor1?.signature;
-      const hasSupervisor2Signed = currentApprovals.supervisor2?.signature;
+    // Pour le signataire final, vérifier que les deux premiers ont signé (uniquement en modification)
+    if (signatureType === 'finalApproval' && engagement) {
+      const hasSupervisor1Signed = currentApprovals?.supervisor1?.signature;
+      const hasSupervisor2Signed = currentApprovals?.supervisor2?.signature;
       
-      // Si c'est un nouvel engagement (null), le Coordonnateur National ne peut pas signer
-      if (!engagement) return false;
-      
-      // Vérifier que les deux premiers ont signé pour l'engagement existant
       if (!hasSupervisor1Signed || !hasSupervisor2Signed) {
         return false;
       }
@@ -208,6 +195,10 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   const canDelete = hasPermission('engagements', 'delete');
   const canView = hasPermission('engagements', 'view');
   
+  // Vérifier si la subvention sélectionnée est active
+  const activeGrant = grants.find(grant => grant.status === 'active');
+  const canCreateEngag = canCreate && activeGrant;
+
   // Récupération des données
   const userProfession = getUserProfession();
   const userFullName = getUserFullName();
@@ -216,7 +207,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
   // 🚨 GESTIONNAIRES D'ÉVÉNEMENTS
 
-  // Fonction pour signer un engagement
+  // Fonction pour signer un engagement existant (édition)
   const handleSignEngagement = (engagement: Engagement | null, signatureType: string) => {
     if (!canSignEngagement(engagement, signatureType)) {
       showWarning('Permission refusée', 'Vous ne pouvez pas signer cet engagement');
@@ -263,21 +254,6 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
       onUpdateEngagement(engagement.id, updates);
       showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès');
-    } else {
-      // Cas d'un nouvel engagement (création)
-      const updatedApproval = {
-        name: userFullName,
-        date: new Date().toISOString().split('T')[0],
-        signature: true,
-        observation: approvals[signatureType as keyof typeof approvals].observation
-      };
-
-      setApprovals(prev => ({
-        ...prev,
-        [signatureType]: updatedApproval
-      }));
-      
-      showSuccess('Signature préparée', 'Votre signature sera enregistrée avec le nouvel engagement');
     }
     
     // Réinitialiser les observations après signature
@@ -285,6 +261,36 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       ...prev,
       [signatureType]: { ...prev[signatureType as keyof typeof approvals], observation: '' }
     }));
+  };
+
+  // Fonction pour signer un nouvel engagement (création)
+  const handleSignNewEngagement = (signatureType: string) => {
+    const userProfession = getUserProfession();
+    const userName = getUserFullName();
+    
+    // Vérifier que l'utilisateur peut signer (Coordonnateur National ne peut pas signer en création)
+    if (signatureType === 'finalApproval') {
+      showWarning('Signature impossible', 'Le Coordonnateur National ne peut pas signer lors de la création d\'un engagement');
+      return;
+    }
+    
+    if (!userName) {
+      showWarning('Nom manquant', 'Impossible de signer sans nom d\'utilisateur');
+      return;
+    }
+    
+    // Mettre à jour les approbations avec la signature
+    setApprovals(prev => ({
+      ...prev,
+      [signatureType]: {
+        name: userName,
+        signature: true,
+        observation: prev[signatureType as keyof typeof prev].observation,
+        date: new Date().toISOString().split('T')[0]
+      }
+    }));
+    
+    showSuccess('Signature préparée', 'Votre signature sera enregistrée avec le nouvel engagement');
   };
 
   // Réinitialisation du formulaire
@@ -319,6 +325,12 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   // Soumission du formulaire
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    // 🎯 VÉRIFICATION SUBVENTION ACTIVE
+    if (!activeGrant) {
+      showWarning('Subvention inactive', 'Impossible de créer un engagement car la subvention n\'est pas active');
+      return;
+    }
     
     if (!canCreate && !editingEngagement) {
       showWarning('Permission refusée', 'Vous n\'avez pas la permission de créer des engagements');
@@ -336,32 +348,37 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       return;
     }
 
-    // Préparation des données d'approbation
+    // 🎯 MODIFICATION IMPORTANTE : Préparation des données d'approbation
+    // Pour les NOUVEAUX engagements, on enregistre seulement les signatures validées
     const approvalData: any = {};
     
-    if (approvals.supervisor1.name) {
+    // Coordinateur de la Subvention - enregistré seulement si signé
+    if (approvals.supervisor1.signature && approvals.supervisor1.name) {
       approvalData.supervisor1 = {
         name: approvals.supervisor1.name,
         date: new Date().toISOString().split('T')[0],
-        signature: approvals.supervisor1.signature,
+        signature: true,
         observation: approvals.supervisor1.observation
       };
     }
     
-    if (approvals.supervisor2.name) {
+    // Comptable - enregistré seulement si signé
+    if (approvals.supervisor2.signature && approvals.supervisor2.name) {
       approvalData.supervisor2 = {
         name: approvals.supervisor2.name,
         date: new Date().toISOString().split('T')[0],
-        signature: approvals.supervisor2.signature,
+        signature: true,
         observation: approvals.supervisor2.observation
       };
     }
     
-    if (approvals.finalApproval.name) {
+    // Coordonnateur National - NE PEUT PAS signer lors de l'ajout
+    // Pour les nouveaux engagements, on n'enregistre JAMAIS le Coordonnateur National
+    if (editingEngagement && approvals.finalApproval.signature && approvals.finalApproval.name) {
       approvalData.finalApproval = {
         name: approvals.finalApproval.name,
         date: new Date().toISOString().split('T')[0],
-        signature: approvals.finalApproval.signature,
+        signature: true,
         observation: approvals.finalApproval.observation
       };
     }
@@ -403,7 +420,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
         invoiceNumber: formData.invoiceNumber,
         date: formData.date,
         status: formData.status,
-        approvals: approvalData
+        approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined
       });
       showSuccess('Engagement créé', 'L\'engagement a été créé avec succès');
     }
@@ -545,6 +562,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   const goToPreviousPage = () => currentPage > 1 && setCurrentPage(currentPage - 1);
   const goToNextPage = () => currentPage < totalPages && setCurrentPage(currentPage + 1);
 
+  // 🎯 MODIFICATION : Export PDF avec logo uniquement sur la première page
   const exportEngagementForm = async () => {
     const engagement = editingEngagement;
     if (!engagement) return;
@@ -557,7 +575,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       const pageHeight = pdf.internal.pageSize.getHeight();
       const margin = 20;
 
-      // Générer le contenu principal
+      // Générer le contenu principal (première page avec logo)
       const mainContent = generateMainPDFContent(engagement);
       const tempMainDiv = document.createElement('div');
       tempMainDiv.innerHTML = mainContent;
@@ -574,10 +592,10 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       const mainImgWidth = pageWidth - (margin * 2);
       const mainImgHeight = (mainCanvas.height * mainImgWidth) / mainCanvas.width;
 
-      // Ajouter la première page avec le contenu principal
+      // Ajouter la première page avec le contenu principal et le logo
       pdf.addImage(mainImgData, 'PNG', margin, margin, mainImgWidth, mainImgHeight);
 
-      // Générer le contenu des signatures (deuxième page)
+      // Générer le contenu des signatures (deuxième page SANS logo)
       const signatureContent = generateSignaturePDFContent(engagement);
       const tempSignatureDiv = document.createElement('div');
       tempSignatureDiv.innerHTML = signatureContent;
@@ -594,7 +612,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       const signatureImgWidth = pageWidth - (margin * 2);
       const signatureImgHeight = (signatureCanvas.height * signatureImgWidth) / signatureCanvas.width;
 
-      // Ajouter une deuxième page pour les signatures
+      // Ajouter une deuxième page pour les signatures (sans logo)
       pdf.addPage();
       pdf.addImage(signatureImgData, 'PNG', margin, margin, signatureImgWidth, signatureImgHeight);
 
@@ -609,6 +627,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     }
   };
 
+  // 🎯 MODIFICATION : Génération du contenu principal avec logo
   const generateMainPDFContent = (engagement: Engagement) => {
     const budgetLine = getBudgetLine(engagement.budgetLineId);
     const subBudgetLine = getSubBudgetLine(engagement.subBudgetLineId);
@@ -616,99 +635,130 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     const currencySymbol = getCurrencySymbol(grant?.currency || 'EUR');
 
     return `
-      <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;">
-        <!-- Header -->
-        <div style="text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #2c5aa0;">
-          <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px;">FICHE D'ENGAGEMENT</h1>
-          <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${engagement.engagementNumber}</h2>
-          <p>Date: ${new Date(engagement.date).toLocaleDateString('fr-FR', {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-          })}</p>
+      <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px;">
+        <!-- Header avec Logo -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #2c5aa0;">
+          <div style="flex: 1;">
+            <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px;">FICHE D'ENGAGEMENT</h1>
+            <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${engagement.engagementNumber}</h2>
+            <p>Date: ${new Date(engagement.date).toLocaleDateString('fr-FR', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            })}</p>
+          </div>
+          <div style="width: 80px; height: 32px;">
+            <img src="/budgetbase/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
+          </div>
         </div>
         
         <!-- Informations de la Ligne Budgétaire -->
-        <div class="section">
+        <div style="margin-bottom: 25px; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: #fafafa;">
           <h3 style="color: #2c5aa0; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 16px;">
             Informations de la Ligne Budgétaire
           </h3>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
             <div>
               <strong>Subvention:</strong>
-              <div class="form-field">${grant?.name || 'Non spécifié'}</div>
+              <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+                ${grant?.name || 'Non spécifié'}
+              </div>
             </div>
             <div>
               <strong>Référence:</strong>
-              <div class="form-field">${grant?.reference || 'N/A'}</div>
+              <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+                ${grant?.reference || 'N/A'}
+              </div>
             </div>
             <div>
               <strong>Ligne Budgétaire:</strong>
-              <div class="form-field">${budgetLine?.code || 'N/A'} - ${budgetLine?.name || 'Ligne supprimée'}</div>
+              <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+                ${budgetLine?.code || 'N/A'} - ${budgetLine?.name || 'Ligne supprimée'}
+              </div>
             </div>
             <div>
               <strong>Sous-Ligne Budgétaire:</strong>
-              <div class="form-field">${subBudgetLine?.code || 'N/A'} - ${subBudgetLine?.name || 'Sous-ligne supprimée'}</div>
+              <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+                ${subBudgetLine?.code || 'N/A'} - ${subBudgetLine?.name || 'Sous-ligne supprimée'}
+              </div>
             </div>
           </div>
         </div>
         
         <!-- Détails de l'Engagement -->
-        <div class="section">
+        <div style="margin-bottom: 25px; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: #fafafa;">
           <h3 style="color: #2c5aa0; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 16px;">
             Détails de l'Engagement
           </h3>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
             <div>
               <strong>N° d'Engagement:</strong>
-              <div class="form-field">${engagement.engagementNumber}</div>
+              <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+                ${engagement.engagementNumber}
+              </div>
             </div>
             <div>
               <strong>Date:</strong>
-              <div class="form-field">${new Date(engagement.date).toLocaleDateString('fr-FR')}</div>
+              <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+                ${new Date(engagement.date).toLocaleDateString('fr-FR')}
+              </div>
             </div>
             <div>
               <strong>Fournisseur:</strong>
-              <div class="form-field">${engagement.supplier || 'Non spécifié'}</div>
+              <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+                ${engagement.supplier || 'Non spécifié'}
+              </div>
             </div>
             <div>
               <strong>Statut:</strong>
-              <div class="form-field">${ENGAGEMENT_STATUS[engagement.status]?.label || engagement.status}</div>
+              <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+                ${ENGAGEMENT_STATUS[engagement.status]?.label || engagement.status}
+              </div>
             </div>
             <div>
               <strong>Montant:</strong>
-              <div class="form-field">${engagement.amount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}</div>
+              <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+                ${engagement.amount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+              </div>
             </div>
             <div>
               <strong>Devise:</strong>
-              <div class="form-field">${grant?.currency || 'EUR'} (${currencySymbol})</div>
+              <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+                ${grant?.currency || 'EUR'} (${currencySymbol})
+              </div>
             </div>
           </div>
           
           <div style="margin-bottom: 15px;">
             <strong>Description:</strong>
-            <div class="form-field" style="min-height: 60px;">${engagement.description.replace(/\n/g, '<br>')}</div>
+            <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff; min-height: 60px;">
+              ${engagement.description.replace(/\n/g, '<br>')}
+            </div>
           </div>
           
           ${engagement.quoteReference ? `
           <div style="margin-bottom: 10px;">
             <strong>Référence du Devis:</strong>
-            <div class="form-field">${engagement.quoteReference}</div>
+            <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+              ${engagement.quoteReference}
+            </div>
           </div>
           ` : ''}
           
           ${engagement.invoiceNumber ? `
           <div>
             <strong>N° de Facture:</strong>
-            <div class="form-field">${engagement.invoiceNumber}</div>
+            <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+              ${engagement.invoiceNumber}
+            </div>
           </div>
           ` : ''}
         </div>
         
         <!-- Footer -->
         <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #2c5aa0; text-align: center; font-size: 12px; color: #777;">
-          <p>Document généré le ${new Date().toLocaleDateString('fr-FR', {
+          <p>Page 1/2 - Document généré le ${new Date().toLocaleDateString('fr-FR', {
             year: 'numeric',
             month: 'long',
             day: 'numeric',
@@ -721,11 +771,12 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     `;
   };
 
+  // 🎯 MODIFICATION : Génération du contenu des signatures SANS logo
   const generateSignaturePDFContent = (engagement: Engagement) => {
     const currentApprovals = engagement.approvals || approvals;
 
     return `
-      <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding-top: 50px;">
+      <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; padding-top: 50px;">
         <div style="text-align: center; margin-bottom: 30px;">
           <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px;">SIGNATURES D'APPROBATION</h1>
           <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${engagement.engagementNumber}</h2>
@@ -737,44 +788,50 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
             Signatures d'Approbation
           </h3>
           <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
-            <div class="signature-box">
+            <div style="border: 1px solid #ccc; padding: 20px; text-align: center; min-height: 150px; border-radius: 8px; background: #fff;">
               <h4 style="font-size: 14px; color: #555; margin-bottom: 15px;">Coordinateur de la subvention</h4>
               <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
-              <div class="form-field" style="min-height: 40px;">${currentApprovals.supervisor1?.name || '_________________________'}</div>
+              <div style="border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 4px; min-height: 40px; background: #f9f9f9;">
+                ${currentApprovals.supervisor1?.name || '_________________________'}
+              </div>
               <p>Date: ${(currentApprovals.supervisor1 as any)?.date || '___/___/_____'}</p>
               <p>Signature: ${currentApprovals.supervisor1?.signature ? '✅ Validée' : '◻ Non validée'}</p>
               ${currentApprovals.supervisor1?.observation ? `
-              <div style="margin-top: 10px;">
-                <strong>Observation:</strong>
-                <p style="font-size: 12px; color: #666;">${currentApprovals.supervisor1.observation}</p>
+              <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+                <strong style="font-size: 11px;">Observation:</strong>
+                <p style="font-size: 11px; color: #666; margin: 5px 0 0 0;">${currentApprovals.supervisor1.observation}</p>
               </div>
               ` : ''}
             </div>
             
-            <div class="signature-box">
+            <div style="border: 1px solid #ccc; padding: 20px; text-align: center; min-height: 150px; border-radius: 8px; background: #fff;">
               <h4 style="font-size: 14px; color: #555; margin-bottom: 15px;">Comptable</h4>
               <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
-              <div class="form-field" style="min-height: 40px;">${currentApprovals.supervisor2?.name || '_________________________'}</div>
+              <div style="border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 4px; min-height: 40px; background: #f9f9f9;">
+                ${currentApprovals.supervisor2?.name || '_________________________'}
+              </div>
               <p>Date: ${(currentApprovals.supervisor2 as any)?.date || '___/___/_____'}</p>
               <p>Signature: ${currentApprovals.supervisor2?.signature ? '✅ Validée' : '◻ Non validée'}</p>
               ${currentApprovals.supervisor2?.observation ? `
-              <div style="margin-top: 10px;">
-                <strong>Observation:</strong>
-                <p style="font-size: 12px; color: #666;">${currentApprovals.supervisor2.observation}</p>
+              <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+                <strong style="font-size: 11px;">Observation:</strong>
+                <p style="font-size: 11px; color: #666; margin: 5px 0 0 0;">${currentApprovals.supervisor2.observation}</p>
               </div>
               ` : ''}
             </div>
             
-            <div class="signature-box">
+            <div style="border: 1px solid #ccc; padding: 20px; text-align: center; min-height: 150px; border-radius: 8px; background: #fff;">
               <h4 style="font-size: 14px; color: #555; margin-bottom: 15px;">Coordonnateur national</h4>
               <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
-              <div class="form-field" style="min-height: 40px;">${currentApprovals.finalApproval?.name || '_________________________'}</div>
+              <div style="border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 4px; min-height: 40px; background: #f9f9f9;">
+                ${currentApprovals.finalApproval?.name || '_________________________'}
+              </div>
               <p>Date: ${(currentApprovals.finalApproval as any)?.date || '___/___/_____'}</p>
               <p>Signature: ${currentApprovals.finalApproval?.signature ? '✅ Validée' : '◻ Non validée'}</p>
               ${currentApprovals.finalApproval?.observation ? `
-              <div style="margin-top: 10px;">
-                <strong>Observation:</strong>
-                <p style="font-size: 12px; color: #666;">${currentApprovals.finalApproval.observation}</p>
+              <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+                <strong style="font-size: 11px;">Observation:</strong>
+                <p style="font-size: 11px; color: #666; margin: 5px 0 0 0;">${currentApprovals.finalApproval.observation}</p>
               </div>
               ` : ''}
             </div>
@@ -1033,7 +1090,12 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                 setFormData(prev => ({ ...prev, grantId: selectedGrant.id }));
                 setShowForm(true);
               }}
-              className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center justify-center space-x-2"
+              disabled={!canCreateEngag}
+              className={`px-4 py-2 rounded-xl font-medium transition-all duration-200 flex items-center space-x-2 ${
+                canCreateEngag
+                  ? 'bg-gradient-to-r from-green-600 to-blue-600 text-white hover:shadow-lg transform hover:scale-[1.02]'
+                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              }`}
             >
               <Plus className="w-4 h-4" />
               <span>Nouvel Engagement</span>
@@ -1155,10 +1217,15 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                 {editingEngagement && (
                   <button
                     onClick={exportEngagementForm}
-                    className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                    disabled={isGeneratingPDF}
+                    className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
                     title="Exporter la fiche"
                   >
-                    <Download className="w-5 h-5" />
+                    {isGeneratingPDF ? (
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+                    ) : (
+                      <Download className="w-5 h-5" />
+                    )}
                   </button>
                 )}
                 <button
@@ -1222,6 +1289,11 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                   <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
                     <User className="w-5 h-5 mr-2" />
                     Signatures d'Approbation
+                    {!editingEngagement && (
+                      <span className="ml-2 text-sm font-normal text-blue-600 bg-blue-100 px-2 py-1 rounded">
+                        Mode création
+                      </span>
+                    )}
                   </h3>
                   
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1229,29 +1301,38 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                     <div className="bg-white rounded-lg p-4 border border-gray-200">
                       <div className="flex items-center justify-between mb-3">
                         <h4 className="font-medium text-gray-800">Coordinateur de la Subvention</h4>
-                        {/* Dans chaque section de signature */}
                         {canSignEngagement(editingEngagement, 'supervisor1') && (
                           <button
                             type="button"
-                            onClick={() => handleSignEngagement(editingEngagement, 'supervisor1')}
+                            onClick={() => editingEngagement 
+                              ? handleSignEngagement(editingEngagement, 'supervisor1')
+                              : handleSignNewEngagement('supervisor1')
+                            }
                             className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
                           >
                             Signer
                           </button>
                         )}
                       </div>
-                      <input
-                        type="text"
-                        value={userProfession === 'Coordinateur de la Subvention' && !approvals.supervisor1.name ? userFullName : approvals.supervisor1.name}
-                        onChange={(e) => setApprovals(prev => ({
-                          ...prev,
-                          supervisor1: { ...prev.supervisor1, name: e.target.value }
-                        }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                        disabled
-                      />
                       
-                      <div className="flex items-center justify-between">
+                      <div className="mb-3">
+                        <label className="block text-xs text-gray-600 mb-1">Nom du signataire</label>
+                        <input
+                          type="text"
+                          value={approvals.supervisor1.name}
+                          onChange={(e) => !editingEngagement && setApprovals(prev => ({
+                            ...prev,
+                            supervisor1: { ...prev.supervisor1, name: e.target.value }
+                          }))}
+                          className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                            editingEngagement || approvals.supervisor1.signature ? 'bg-gray-100' : ''
+                          }`}
+                          disabled={editingEngagement || approvals.supervisor1.signature}
+                          placeholder={userProfession === 'Coordinateur de la Subvention' ? getUserFullName() : "Nom du coordinateur"}
+                        />
+                      </div>
+                      
+                      <div className="flex items-center justify-between mb-3">
                         <label className="flex items-center space-x-2">
                           <input
                             type="checkbox"
@@ -1261,9 +1342,11 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                               supervisor1: { ...prev.supervisor1, signature: e.target.checked }
                             }))}
                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            disabled={userProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
+                            disabled={true} // La case est gérée par le bouton "Signer"
                           />
-                          <span className="text-sm text-gray-700">Signature validée</span>
+                          <span className="text-sm text-gray-700">
+                            {approvals.supervisor1.signature ? '✅ Signature validée' : 'Signature en attente'}
+                          </span>
                         </label>
                         
                         <button
@@ -1284,82 +1367,104 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                               ...prev,
                               supervisor1: { ...prev.supervisor1, observation: e.target.value }
                             }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                             rows={3}
                             placeholder="Saisissez votre observation..."
-                            disabled={userProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
+                            disabled={approvals.supervisor1.signature}
                           />
+                          <p className="text-xs text-gray-500 mt-1">
+                            {approvals.supervisor1.signature 
+                              ? "Observation verrouillée après signature" 
+                              : "Cette observation sera enregistrée avec votre signature"
+                            }
+                          </p>
                         </div>
                       )}
                     </div>
 
                     {/* Comptable */}
                     <div className="bg-white rounded-lg p-4 border border-gray-200">
-                      <div className="bg-white rounded-lg p-4 border border-gray-200">
-                        <div className="flex items-center justify-between mb-3">
-                          <h4 className="font-medium text-gray-800">Comptable</h4>
-                          {canSignEngagement(editingEngagement, 'supervisor2') && (
-                            <button
-                              type="button"
-                              onClick={() => handleSignEngagement(editingEngagement, 'supervisor2')}
-                              className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
-                            >
-                              Signer
-                            </button>
-                          )}
-                        </div>
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-medium text-gray-800">Comptable</h4>
+                        {canSignEngagement(editingEngagement, 'supervisor2') && (
+                          <button
+                            type="button"
+                            onClick={() => editingEngagement 
+                              ? handleSignEngagement(editingEngagement, 'supervisor2')
+                              : handleSignNewEngagement('supervisor2')
+                            }
+                            className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
+                          >
+                            Signer
+                          </button>
+                        )}
+                      </div>
+                      
+                      <div className="mb-3">
+                        <label className="block text-xs text-gray-600 mb-1">Nom du signataire</label>
                         <input
                           type="text"
-                          value={userProfession === 'Comptable' && !approvals.supervisor2.name ? userFullName : approvals.supervisor2.name}
-                          onChange={(e) => setApprovals(prev => ({
+                          value={approvals.supervisor2.name}
+                          onChange={(e) => !editingEngagement && setApprovals(prev => ({
                             ...prev,
                             supervisor2: { ...prev.supervisor2, name: e.target.value }
                           }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                          disabled
+                          className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                            editingEngagement || approvals.supervisor2.signature ? 'bg-gray-100' : ''
+                          }`}
+                          disabled={editingEngagement || approvals.supervisor2.signature}
+                          placeholder={userProfession === 'Comptable' ? getUserFullName() : "Nom du comptable"}
                         />
-                        
-                        <div className="flex items-center justify-between">
-                          <label className="flex items-center space-x-2">
-                            <input
-                              type="checkbox"
-                              checked={approvals.supervisor2.signature}
-                              onChange={(e) => setApprovals(prev => ({
-                                ...prev,
-                                supervisor2: { ...prev.supervisor2, signature: e.target.checked }
-                              }))}
-                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                              disabled={userProfession !== 'Comptable' || !!approvals.supervisor2.name}
-                            />
-                            <span className="text-sm text-gray-700">Signature validée</span>
-                          </label>
-                          
-                          <button
-                            type="button"
-                            onClick={() => toggleObservation('supervisor2')}
-                            className="text-blue-600 text-sm hover:text-blue-800 flex items-center space-x-1"
-                          >
-                            <span>Observation</span>
-                            {showObservations.supervisor2 ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                          </button>
-                        </div>
-                        
-                        {showObservations.supervisor2 && (
-                          <div className="mt-3">
-                            <textarea
-                              value={approvals.supervisor2.observation}
-                              onChange={(e) => setApprovals(prev => ({
-                                ...prev,
-                                supervisor2: { ...prev.supervisor2, observation: e.target.value }
-                              }))}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                              rows={3}
-                              placeholder="Saisissez votre observation..."
-                              disabled={userProfession !== 'Comptable' || !!approvals.supervisor2.name}
-                            />
-                          </div>
-                        )}
                       </div>
+                      
+                      <div className="flex items-center justify-between mb-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={approvals.supervisor2.signature}
+                            onChange={(e) => setApprovals(prev => ({
+                              ...prev,
+                              supervisor2: { ...prev.supervisor2, signature: e.target.checked }
+                            }))}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            disabled={true}
+                          />
+                          <span className="text-sm text-gray-700">
+                            {approvals.supervisor2.signature ? '✅ Signature validée' : 'Signature en attente'}
+                          </span>
+                        </label>
+                        
+                        <button
+                          type="button"
+                          onClick={() => toggleObservation('supervisor2')}
+                          className="text-blue-600 text-sm hover:text-blue-800 flex items-center space-x-1"
+                        >
+                          <span>Observation</span>
+                          {showObservations.supervisor2 ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      
+                      {showObservations.supervisor2 && (
+                        <div className="mt-3">
+                          <textarea
+                            value={approvals.supervisor2.observation}
+                            onChange={(e) => setApprovals(prev => ({
+                              ...prev,
+                              supervisor2: { ...prev.supervisor2, observation: e.target.value }
+                            }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                            rows={3}
+                            placeholder="Saisissez votre observation..."
+                            disabled={approvals.supervisor2.signature}
+                          />
+                          <p className="text-xs text-gray-500 mt-1">
+                            {approvals.supervisor2.signature 
+                              ? "Observation verrouillée après signature" 
+                              : "Cette observation sera enregistrée avec votre signature"
+                            }
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     {/* Coordonnateur National */}
@@ -1376,18 +1481,33 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                           </button>
                         )}
                       </div>
-                      <input
-                        type="text"
-                        value={userProfession === 'Coordonnateur National' && !approvals.finalApproval.name ? userFullName : approvals.finalApproval.name}
-                        onChange={(e) => setApprovals(prev => ({
-                          ...prev,
-                          finalApproval: { ...prev.finalApproval, name: e.target.value }
-                        }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                        disabled
-                      />
                       
-                      <div className="flex items-center justify-between">
+                      <div className="mb-3">
+                        <label className="block text-xs text-gray-600 mb-1">Nom du signataire</label>
+                        <input
+                          type="text"
+                          value={approvals.finalApproval.name}
+                          onChange={(e) => !editingEngagement && setApprovals(prev => ({
+                            ...prev,
+                            finalApproval: { ...prev.finalApproval, name: e.target.value }
+                          }))}
+                          className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                            editingEngagement || approvals.finalApproval.signature ? 'bg-gray-100' : ''
+                          }`}
+                          disabled={editingEngagement || approvals.finalApproval.signature || !editingEngagement}
+                          placeholder={userProfession === 'Coordonnateur National' ? getUserFullName() : "Nom du coordonnateur"}
+                        />
+                      </div>
+                      
+                      {!editingEngagement && (
+                        <div className="mb-3 p-2 bg-blue-50 rounded border border-blue-200">
+                          <p className="text-xs text-blue-700">
+                            ℹ️ Le Coordonnateur National ne peut signer qu'après la création de l'engagement
+                          </p>
+                        </div>
+                      )}
+                      
+                      <div className="flex items-center justify-between mb-3">
                         <label className="flex items-center space-x-2">
                           <input
                             type="checkbox"
@@ -1397,15 +1517,18 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                               finalApproval: { ...prev.finalApproval, signature: e.target.checked }
                             }))}
                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            disabled={userProfession !== 'Coordonnateur National' || !!approvals.finalApproval.name}
+                            disabled={true}
                           />
-                          <span className="text-sm text-gray-700">Signature validée</span>
+                          <span className="text-sm text-gray-700">
+                            {approvals.finalApproval.signature ? '✅ Signature validée' : 'Signature en attente'}
+                          </span>
                         </label>
                         
                         <button
                           type="button"
                           onClick={() => toggleObservation('finalApproval')}
                           className="text-blue-600 text-sm hover:text-blue-800 flex items-center space-x-1"
+                          disabled={!editingEngagement}
                         >
                           <span>Observation</span>
                           {showObservations.finalApproval ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -1420,15 +1543,33 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                               ...prev,
                               finalApproval: { ...prev.finalApproval, observation: e.target.value }
                             }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                             rows={3}
                             placeholder="Saisissez votre observation..."
-                            disabled={userProfession !== 'Coordonnateur National' || !!approvals.finalApproval.name}
-
+                            disabled={approvals.finalApproval.signature || !editingEngagement}
                           />
+                          <p className="text-xs text-gray-500 mt-1">
+                            {!editingEngagement 
+                              ? "Observations disponibles après création" 
+                              : approvals.finalApproval.signature 
+                                ? "Observation verrouillée après signature" 
+                                : "Cette observation sera enregistrée avec votre signature"
+                            }
+                          </p>
                         </div>
                       )}
                     </div>
+                  </div>
+
+                  {/* Information sur le comportement des signatures */}
+                  <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                    <h4 className="font-medium text-blue-900 mb-2">Comportement des signatures :</h4>
+                    <ul className="text-sm text-blue-700 space-y-1">
+                      <li>• <strong>Coordinateur & Comptable</strong> : Peuvent signer dès la création</li>
+                      <li>• <strong>Coordonnateur National</strong> : Ne peut signer qu'après création</li>
+                      <li>• Les noms ne sont enregistrés que si la signature est validée</li>
+                      <li>• Les observations sont verrouillées après signature</li>
+                    </ul>
                   </div>
                 </div>
               )}
@@ -1714,7 +1855,6 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                       <p className="text-sm text-green-600 font-medium">Montant Total</p>
                       <p className="text-2xl font-bold text-green-900">
                         {totalAmount} {getCurrencySymbol(selectedGrant?.currency || 'EUR')}
-
                       </p>
                     </div>
                     <div className="bg-purple-50 rounded-lg p-4">

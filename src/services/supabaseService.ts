@@ -36,7 +36,8 @@ export const grantsService = {
         endDate: grant.end_date,
         status: grant.status as Grant['status'],
         description: grant.description,
-        bankAccount: grant.bank_account as Grant['bankAccount']
+        bankAccount: grant.bank_account as Grant['bankAccount'],
+        created_at: grant.created_at
       }));
     } catch (error) {
       handleSupabaseError(error);

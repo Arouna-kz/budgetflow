@@ -33,6 +33,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
   const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
   const { user: currentUser, userProfile, userRole } = useAuth();
 
+  
+
   // HOOK DE NOTIFICATIONS POUR LES PRÉFINANCEMENTS
   const { notificationCount, hasNotifications} = usePrefinancingNotifications(prefinancings);
 
@@ -119,18 +121,16 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     return signatureProfessions.includes(getUserProfession());
   };
 
+  // 🎯 MODIFICATION : Fonction pour vérifier si l'utilisateur peut signer
   const canSignPrefinancing = (prefinancing: Prefinancing | null, signatureType: string): boolean => {
+    const userProfession = getUserProfession();
+    
+    // Coordonnateur National ne peut JAMAIS signer lors de l'ajout
     if (!prefinancing && signatureType === 'finalApproval') {
       return false;
     }
     
     const currentApprovals = prefinancing ? prefinancing.approvals : approvals;
-    
-    if (!currentApprovals) {
-      return false;
-    }
-    
-    const userProfession = getUserProfession();
     
     // Vérification basée sur la profession et le type de signature
     const professionCanSign = 
@@ -141,15 +141,13 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     if (!professionCanSign) return false;
 
     // Vérifie que la signature n'est pas déjà apposée
-    const existingApproval = currentApprovals[signatureType as keyof typeof currentApprovals];
+    const existingApproval = currentApprovals?.[signatureType as keyof typeof currentApprovals];
     if (existingApproval?.signature) return false;
 
-    // Pour le signataire final, vérifier que les deux premiers ont signé
-    if (signatureType === 'finalApproval') {
-      const hasSupervisor1Signed = currentApprovals.supervisor1?.signature;
-      const hasSupervisor2Signed = currentApprovals.supervisor2?.signature;
-      
-      if (!prefinancing) return false;
+    // Pour le signataire final, vérifier que les deux premiers ont signé (uniquement en modification)
+    if (signatureType === 'finalApproval' && prefinancing) {
+      const hasSupervisor1Signed = currentApprovals?.supervisor1?.signature;
+      const hasSupervisor2Signed = currentApprovals?.supervisor2?.signature;
       
       if (!hasSupervisor1Signed || !hasSupervisor2Signed) {
         return false;
@@ -177,6 +175,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     });
   };
 
+  // 🎯 MODIFICATION : Fonction pour signer un préfinancement existant (édition)
   const handleSignPrefinancing = (prefinancing: Prefinancing | null, signatureType: string) => {
     if (!canSignPrefinancing(prefinancing, signatureType)) {
       showWarning('Permission refusée', 'Vous ne pouvez pas signer ce préfinancement');
@@ -206,21 +205,6 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
 
       onUpdatePrefinancing(prefinancing.id, updates);
       showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès');
-    } else {
-      // Cas d'un nouveau préfinancement (création)
-      const updatedApproval = {
-        name: getUserFullName(),
-        date: new Date().toISOString().split('T')[0],
-        signature: true,
-        observation: approvals[signatureType as keyof typeof approvals].observation
-      };
-
-      setApprovals(prev => ({
-        ...prev,
-        [signatureType]: updatedApproval
-      }));
-      
-      showSuccess('Signature préparée', 'Votre signature sera enregistrée avec le nouveau préfinancement');
     }
     
     // Réinitialiser les observations après signature
@@ -228,6 +212,36 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
       ...prev,
       [signatureType]: { ...prev[signatureType as keyof typeof approvals], observation: '' }
     }));
+  };
+
+  // 🎯 NOUVELLE FONCTION : Pour signer un nouveau préfinancement (création)
+  const handleSignNewPrefinancing = (signatureType: string) => {
+    const userProfession = getUserProfession();
+    const userName = getUserFullName();
+    
+    // Vérifier que l'utilisateur peut signer (Coordonnateur National ne peut pas signer en création)
+    if (signatureType === 'finalApproval') {
+      showWarning('Signature impossible', 'Le Coordonnateur National ne peut pas signer lors de la création d\'un préfinancement');
+      return;
+    }
+    
+    if (!userName) {
+      showWarning('Nom manquant', 'Impossible de signer sans nom d\'utilisateur');
+      return;
+    }
+    
+    // Mettre à jour les approbations avec la signature
+    setApprovals(prev => ({
+      ...prev,
+      [signatureType]: {
+        name: userName,
+        signature: true,
+        observation: prev[signatureType as keyof typeof prev].observation,
+        date: new Date().toISOString().split('T')[0]
+      }
+    }));
+    
+    showSuccess('Signature préparée', 'Votre signature sera enregistrée avec le nouveau préfinancement');
   };
 
   // EFFET POUR PRÉ-REMPLIR LES NOMS DES SIGNATAIRES
@@ -257,6 +271,10 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
   const canEdit = hasPermission('prefinancing', 'edit');
   const canDelete = hasPermission('prefinancing', 'delete');
   const canView = hasPermission('prefinancing', 'view');
+
+  // Vérifier si une subvention active existe
+  const activeGrant = grants.find(grant => grant.status === 'active');
+  const canCreatePrefinancing = canCreate && activeGrant;
 
   // Récupération des données utilisateur
   const userProfession = getUserProfession();
@@ -454,9 +472,15 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     setSelectedPrefinancing(null);
   };
 
-  // GESTIONNAIRES D'ÉVÉNEMENTS EXISTANTS
+  // 🎯 MODIFICATION : Gestionnaire de soumission du formulaire
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    // 🎯 VÉRIFICATION SUBVENTION ACTIVE
+    if (!activeGrant) {
+      showWarning('Subvention inactive', 'Impossible de créer un préfinancement car aucune subvention n\'est active');
+      return;
+    }
     
     if (!canCreate && !editingPrefinancing) {
       showWarning('Permission refusée', 'Vous n\'avez pas la permission de créer des préfinancements');
@@ -479,32 +503,37 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
       return;
     }
 
-    // Préparation des données d'approbation
+    // 🎯 MODIFICATION IMPORTANTE : Préparation des données d'approbation
+    // Pour les NOUVEAUX préfinancements, on enregistre seulement les signatures validées
     const approvalData: any = {};
     
-    if (approvals.supervisor1.name) {
+    // Coordinateur de la Subvention - enregistré seulement si signé
+    if (approvals.supervisor1.signature && approvals.supervisor1.name) {
       approvalData.supervisor1 = {
         name: approvals.supervisor1.name,
         date: new Date().toISOString().split('T')[0],
-        signature: approvals.supervisor1.signature,
+        signature: true,
         observation: approvals.supervisor1.observation
       };
     }
     
-    if (approvals.supervisor2.name) {
+    // Comptable - enregistré seulement si signé
+    if (approvals.supervisor2.signature && approvals.supervisor2.name) {
       approvalData.supervisor2 = {
         name: approvals.supervisor2.name,
         date: new Date().toISOString().split('T')[0],
-        signature: approvals.supervisor2.signature,
+        signature: true,
         observation: approvals.supervisor2.observation
       };
     }
     
-    if (approvals.finalApproval.name) {
+    // Coordonnateur National - NE PEUT PAS signer lors de l'ajout
+    // Pour les nouveaux préfinancements, on n'enregistre JAMAIS le Coordonnateur National
+    if (editingPrefinancing && approvals.finalApproval.signature && approvals.finalApproval.name) {
       approvalData.finalApproval = {
         name: approvals.finalApproval.name,
         date: new Date().toISOString().split('T')[0],
-        signature: approvals.finalApproval.signature,
+        signature: true,
         observation: approvals.finalApproval.observation
       };
     }
@@ -553,7 +582,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
           amount: parseFloat(exp.amount),
           description: exp.description
         })),
-        approvals: approvalData,
+        approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined,
         repayments: []
       };
 
@@ -603,7 +632,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     }));
   };
 
-  // FONCTIONS D'EXPORT PDF (conservées de votre code original)
+  // 🎯 MODIFICATION : Fonctions d'export PDF avec logo
   const exportPrefinancingForm = async () => {
     setIsGeneratingPDF(true);
     
@@ -670,6 +699,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     return grant ? grant.totalAmount * 0.3 : 0;
   };
 
+  // 🎯 MODIFICATION : Génération du contenu PDF avec logo
   const generateMainPDFContent = () => {
     const selectedGrant = getSelectedGrant();
     const targetBankAccount = formData.targetBankAccount ? getBankAccount(formData.targetBankAccount) : null;
@@ -677,11 +707,16 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
 
     return `
       <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px;">
-        <!-- Header -->
-        <div style="text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #2c5aa0;">
-          <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px;">DEMANDE DE PRÉFINANCEMENT</h1>
-          <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${getPurposeLabel(formData.purpose)}</h2>
-          <p>Date de la demande: ${new Date(formData.date).toLocaleDateString('fr-FR')}</p>
+        <!-- Header avec Logo -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #2c5aa0;">
+          <div style="flex: 1;">
+            <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px;">DEMANDE DE PRÉFINANCEMENT</h1>
+            <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${getPurposeLabel(formData.purpose)}</h2>
+            <p>Date de la demande: ${new Date(formData.date).toLocaleDateString('fr-FR')}</p>
+          </div>
+          <div style="width: 80px; height: 32px;">
+            <img src="/budgetbase/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
+          </div>
         </div>
         
         <!-- Informations de la Subvention Source -->
@@ -825,12 +860,19 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     `;
   };
 
+  // 🎯 MODIFICATION : Génération du contenu des signatures avec logo
   const generateSignaturePDFContent = () => {
     return `
       <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; padding-top: 50px;">
-        <div style="text-align: center; margin-bottom: 30px;">
-          <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px;">SIGNATURES D'APPROBATION</h1>
-          <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${getPurposeLabel(formData.purpose)}</h2>
+        <!-- Header avec Logo -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+          <div style="flex: 1;">
+            <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px;">SIGNATURES D'APPROBATION</h1>
+            <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${getPurposeLabel(formData.purpose)}</h2>
+          </div>
+          <div style="width: 80px; height: 32px;">
+            <img src="/budgetbase/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
+          </div>
         </div>
         
         <!-- Signatures -->
@@ -946,7 +988,12 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
           {canCreate && (
             <button
               onClick={() => setShowForm(true)}
-              className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
+              disabled={!canCreatePrefinancing}
+              className={`px-4 py-2 rounded-xl font-medium transition-all duration-200 flex items-center space-x-2 ${
+                canCreatePrefinancing
+                  ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-lg transform hover:scale-[1.02]'
+                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              }`}
             >
               <Plus className="w-4 h-4" />
               <span>Nouveau Préfinancement</span>
@@ -1499,9 +1546,17 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-4xl w-full p-8 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-gray-900">
-                {editingPrefinancing ? 'Modifier le Préfinancement' : 'Nouvelle Demande de Préfinancement'}
-              </h3>
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-blue-100 rounded-lg">
+                  <ArrowRightLeft className="w-6 h-6 text-blue-600" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    {editingPrefinancing ? 'Modifier le préfinancement' : 'Nouveau préfinancement'}
+                  </h2>
+                  <p className="text-gray-600">{editingPrefinancing ? 'Modification' : 'Création'} - {getPurposeLabel(formData.purpose)}</p>
+                </div>
+              </div>
               <div className="flex items-center space-x-2">
                 <button
                   onClick={exportPrefinancingForm}
@@ -1893,12 +1948,17 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                 ))}
               </div>
 
-              {/* Section Signatures */}
+              {/* 🎯 MODIFICATION : Section Signatures pour nouveaux préfinancements */}
               {canViewSignatureSection() && (
                 <div className="bg-yellow-50 rounded-xl p-6 border border-yellow-200">
                   <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
                     <User className="w-5 h-5 mr-2" />
                     Signatures d'Approbation
+                    {!editingPrefinancing && (
+                      <span className="ml-2 text-sm font-normal text-blue-600 bg-blue-100 px-2 py-1 rounded">
+                        Mode création
+                      </span>
+                    )}
                   </h3>
                   
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1909,25 +1969,35 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                         {canSignPrefinancing(editingPrefinancing, 'supervisor1') && (
                           <button
                             type="button"
-                            onClick={() => handleSignPrefinancing(editingPrefinancing, 'supervisor1')}
+                            onClick={() => editingPrefinancing 
+                              ? handleSignPrefinancing(editingPrefinancing, 'supervisor1')
+                              : handleSignNewPrefinancing('supervisor1')
+                            }
                             className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
                           >
                             Signer
                           </button>
                         )}
                       </div>
-                      <input
-                        type="text"
-                        value={userProfession === 'Coordinateur de la Subvention' && !approvals.supervisor1.name ? userFullName : approvals.supervisor1.name}
-                        onChange={(e) => setApprovals(prev => ({
-                          ...prev,
-                          supervisor1: { ...prev.supervisor1, name: e.target.value }
-                        }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                        disabled
-                      />
                       
-                      <div className="flex items-center justify-between">
+                      <div className="mb-3">
+                        <label className="block text-xs text-gray-600 mb-1">Nom du signataire</label>
+                        <input
+                          type="text"
+                          value={approvals.supervisor1.name}
+                          onChange={(e) => !editingPrefinancing && setApprovals(prev => ({
+                            ...prev,
+                            supervisor1: { ...prev.supervisor1, name: e.target.value }
+                          }))}
+                          className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                            editingPrefinancing || approvals.supervisor1.signature ? 'bg-gray-100' : ''
+                          }`}
+                          disabled={editingPrefinancing || approvals.supervisor1.signature}
+                          placeholder={userProfession === 'Coordinateur de la Subvention' ? getUserFullName() : "Nom du coordinateur"}
+                        />
+                      </div>
+                      
+                      <div className="flex items-center justify-between mb-3">
                         <label className="flex items-center space-x-2">
                           <input
                             type="checkbox"
@@ -1937,9 +2007,11 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                               supervisor1: { ...prev.supervisor1, signature: e.target.checked }
                             }))}
                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            disabled={userProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
+                            disabled={true} // La case est gérée par le bouton "Signer"
                           />
-                          <span className="text-sm text-gray-700">Signature validée</span>
+                          <span className="text-sm text-gray-700">
+                            {approvals.supervisor1.signature ? '✅ Signature validée' : 'Signature en attente'}
+                          </span>
                         </label>
                         
                         <button
@@ -1960,11 +2032,25 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                               ...prev,
                               supervisor1: { ...prev.supervisor1, observation: e.target.value }
                             }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                             rows={3}
                             placeholder="Saisissez votre observation..."
-                            disabled={userProfession !== 'Coordinateur de la Subvention' || !!approvals.supervisor1.name}
+                            disabled={approvals.supervisor1.signature}
                           />
+                          <p className="text-xs text-gray-500 mt-1">
+                            {approvals.supervisor1.signature 
+                              ? "Observation verrouillée après signature" 
+                              : "Cette observation sera enregistrée avec votre signature"
+                            }
+                          </p>
+                        </div>
+                      )}
+                      
+                      {approvals.supervisor1.signature && (
+                        <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
+                          <p className="text-xs text-green-700">
+                            ✅ Prêt à être signé avec le préfinancement
+                          </p>
                         </div>
                       )}
                     </div>
@@ -1976,25 +2062,35 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                         {canSignPrefinancing(editingPrefinancing, 'supervisor2') && (
                           <button
                             type="button"
-                            onClick={() => handleSignPrefinancing(editingPrefinancing, 'supervisor2')}
+                            onClick={() => editingPrefinancing 
+                              ? handleSignPrefinancing(editingPrefinancing, 'supervisor2')
+                              : handleSignNewPrefinancing('supervisor2')
+                            }
                             className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
                           >
                             Signer
                           </button>
                         )}
                       </div>
-                      <input
-                        type="text"
-                        value={userProfession === 'Comptable' && !approvals.supervisor2.name ? userFullName : approvals.supervisor2.name}
-                        onChange={(e) => setApprovals(prev => ({
-                          ...prev,
-                          supervisor2: { ...prev.supervisor2, name: e.target.value }
-                        }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                        disabled
-                      />
                       
-                      <div className="flex items-center justify-between">
+                      <div className="mb-3">
+                        <label className="block text-xs text-gray-600 mb-1">Nom du signataire</label>
+                        <input
+                          type="text"
+                          value={approvals.supervisor2.name}
+                          onChange={(e) => !editingPrefinancing && setApprovals(prev => ({
+                            ...prev,
+                            supervisor2: { ...prev.supervisor2, name: e.target.value }
+                          }))}
+                          className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                            editingPrefinancing || approvals.supervisor2.signature ? 'bg-gray-100' : ''
+                          }`}
+                          disabled={editingPrefinancing || approvals.supervisor2.signature}
+                          placeholder={userProfession === 'Comptable' ? getUserFullName() : "Nom du comptable"}
+                        />
+                      </div>
+                      
+                      <div className="flex items-center justify-between mb-3">
                         <label className="flex items-center space-x-2">
                           <input
                             type="checkbox"
@@ -2004,9 +2100,11 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                               supervisor2: { ...prev.supervisor2, signature: e.target.checked }
                             }))}
                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            disabled={userProfession !== 'Comptable' || !!approvals.supervisor2.name}
+                            disabled={true}
                           />
-                          <span className="text-sm text-gray-700">Signature validée</span>
+                          <span className="text-sm text-gray-700">
+                            {approvals.supervisor2.signature ? '✅ Signature validée' : 'Signature en attente'}
+                          </span>
                         </label>
                         
                         <button
@@ -2027,11 +2125,25 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                               ...prev,
                               supervisor2: { ...prev.supervisor2, observation: e.target.value }
                             }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                             rows={3}
                             placeholder="Saisissez votre observation..."
-                            disabled={userProfession !== 'Comptable' || !!approvals.supervisor2.name}
+                            disabled={approvals.supervisor2.signature}
                           />
+                          <p className="text-xs text-gray-500 mt-1">
+                            {approvals.supervisor2.signature 
+                              ? "Observation verrouillée après signature" 
+                              : "Cette observation sera enregistrée avec votre signature"
+                            }
+                          </p>
+                        </div>
+                      )}
+                      
+                      {approvals.supervisor2.signature && (
+                        <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
+                          <p className="text-xs text-green-700">
+                            ✅ Prêt à être signé avec le préfinancement
+                          </p>
                         </div>
                       )}
                     </div>
@@ -2050,18 +2162,33 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                           </button>
                         )}
                       </div>
-                      <input
-                        type="text"
-                        value={userProfession === 'Coordonnateur National' && !approvals.finalApproval.name ? userFullName : approvals.finalApproval.name}
-                        onChange={(e) => setApprovals(prev => ({
-                          ...prev,
-                          finalApproval: { ...prev.finalApproval, name: e.target.value }
-                        }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
-                        disabled
-                      />
                       
-                      <div className="flex items-center justify-between">
+                      <div className="mb-3">
+                        <label className="block text-xs text-gray-600 mb-1">Nom du signataire</label>
+                        <input
+                          type="text"
+                          value={approvals.finalApproval.name}
+                          onChange={(e) => !editingPrefinancing && setApprovals(prev => ({
+                            ...prev,
+                            finalApproval: { ...prev.finalApproval, name: e.target.value }
+                          }))}
+                          className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                            editingPrefinancing || approvals.finalApproval.signature ? 'bg-gray-100' : ''
+                          }`}
+                          disabled={editingPrefinancing || approvals.finalApproval.signature || !editingPrefinancing}
+                          placeholder={userProfession === 'Coordonnateur National' ? getUserFullName() : "Nom du coordonnateur"}
+                        />
+                      </div>
+                      
+                      {!editingPrefinancing && (
+                        <div className="mb-3 p-2 bg-blue-50 rounded border border-blue-200">
+                          <p className="text-xs text-blue-700">
+                            ℹ️ Le Coordonnateur National ne peut signer qu'après la création du préfinancement
+                          </p>
+                        </div>
+                      )}
+                      
+                      <div className="flex items-center justify-between mb-3">
                         <label className="flex items-center space-x-2">
                           <input
                             type="checkbox"
@@ -2071,15 +2198,18 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                               finalApproval: { ...prev.finalApproval, signature: e.target.checked }
                             }))}
                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            disabled={userProfession !== 'Coordonnateur National' || !!approvals.finalApproval.name}
+                            disabled={true}
                           />
-                          <span className="text-sm text-gray-700">Signature validée</span>
+                          <span className="text-sm text-gray-700">
+                            {approvals.finalApproval.signature ? '✅ Signature validée' : 'Signature en attente'}
+                          </span>
                         </label>
                         
                         <button
                           type="button"
                           onClick={() => toggleObservation('finalApproval')}
                           className="text-blue-600 text-sm hover:text-blue-800 flex items-center space-x-1"
+                          disabled={!editingPrefinancing}
                         >
                           <span>Observation</span>
                           {showObservations.finalApproval ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -2094,14 +2224,33 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                               ...prev,
                               finalApproval: { ...prev.finalApproval, observation: e.target.value }
                             }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                             rows={3}
                             placeholder="Saisissez votre observation..."
-                            disabled={userProfession !== 'Coordonnateur National' || !!approvals.finalApproval.name}
+                            disabled={approvals.finalApproval.signature || !editingPrefinancing}
                           />
+                          <p className="text-xs text-gray-500 mt-1">
+                            {!editingPrefinancing 
+                              ? "Observations disponibles après création" 
+                              : approvals.finalApproval.signature 
+                                ? "Observation verrouillée après signature" 
+                                : "Cette observation sera enregistrée avec votre signature"
+                            }
+                          </p>
                         </div>
                       )}
                     </div>
+                  </div>
+
+                  {/* Information sur le comportement des signatures */}
+                  <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                    <h4 className="font-medium text-blue-900 mb-2">Comportement des signatures :</h4>
+                    <ul className="text-sm text-blue-700 space-y-1">
+                      <li>• <strong>Coordinateur & Comptable</strong> : Peuvent signer dès la création</li>
+                      <li>• <strong>Coordonnateur National</strong> : Ne peut signer qu'après création</li>
+                      <li>• Les noms ne sont enregistrés que si la signature est validée</li>
+                      <li>• Les observations sont verrouillées après signature</li>
+                    </ul>
                   </div>
                 </div>
               )}

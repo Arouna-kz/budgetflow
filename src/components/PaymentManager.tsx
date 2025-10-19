@@ -1030,7 +1030,8 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
               <option value="all">Tous les statuts</option>
               <option value="pending">En attente</option>
               <option value="approved">Approuvé</option>
-              <option value="cashed">Encaissé</option>
+              <option value="paid">Payé</option>
+              {/* <option value="cashed">Encaissé</option> */}
               <option value="rejected">Rejeté</option>
             </select>
           </div>
@@ -1487,7 +1488,8 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                                   className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PAYMENT_STATUS[payment.status].color}`}
                                 >
                                   <option value="pending">En attente</option>
-                                  <option value="cashed">Encaissé</option>
+                                  <option value="paid">Payé</option>
+                                  {/* <option value="cashed">Encaissé</option> */}
                                 </select>
                               </>
                             ):(

@@ -39,7 +39,9 @@ export interface Grant {
     accountNumber: string;
     bankName: string;
     balance: number;
+    lastUpdateDate?: string;
   };
+  created_at?: string;
 }
 
 export interface BudgetLine {
@@ -154,14 +156,14 @@ export interface Payment {
 
 // **************************Fin*************************
 
-export interface BankAccount {
-  id: string;
-  name: string;
-  accountNumber: string;
-  bankName: string;
-  balance: number;
-  lastUpdateDate: string;
-}
+// export interface BankAccount {
+//   id: string;
+//   name: string;
+//   accountNumber: string;
+//   bankName: string;
+//   balance: number;
+//   lastUpdateDate: string;
+// }
 
 export interface BankTransaction {
   id: string;

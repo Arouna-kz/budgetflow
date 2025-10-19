@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Target, Users, FileText, BarChart3, CreditCard, Banknote, ArrowRightLeft, DollarSign, Settings, LogOut, Menu, X, AlertTriangle } from 'lucide-react';
 import { useAuth } from './hooks/useAuth';
 import { 
@@ -47,7 +47,6 @@ import {
   EmployeeLoan,
 } from './types';
 import { User, UserRole } from './types/user';
-// import { GlobalNotificationProvider, useGlobalNotifications } from './contexts/GlobalNotificationContext';
 import { useGlobalNotifications } from './contexts/GlobalNotificationContext';
 
 import { useEngagementNotifications } from './hooks/useEngagementNotifications';
@@ -87,14 +86,13 @@ function App() {
     hasAnyNotifications
   } = useGlobalNotifications();
 
-  // Dans le composant App, ajoutez ce hook après les autres hooks
-  const { notificationCount, hasNotifications } = useEngagementNotifications(engagements);
-  const { notificationCount: engagementNotificationCount } = useEngagementNotifications(engagements);
-  const { notificationCount: paymentNotificationCount } = usePaymentNotifications(payments);
-  const { notificationCount: prefinancingNotificationCount } = usePrefinancingNotifications(prefinancings);
-  const { notificationCount: employeeLoanNotificationCount } = useEmployeeLoanNotifications(employeeLoans);
+  // Notification hooks
+  const { notificationCount: engagementNotificationCount } = useEngagementNotifications(engagements, selectedGrantId);
+  const { notificationCount: paymentNotificationCount } = usePaymentNotifications(payments, selectedGrantId);
+  const { notificationCount: prefinancingNotificationCount } = usePrefinancingNotifications(prefinancings, selectedGrantId);
+  const { notificationCount: employeeLoanNotificationCount } = useEmployeeLoanNotifications(employeeLoans, selectedGrantId);
 
-   // Mettez à jour les notifications globales quand les counts changent
+  // Mettez à jour les notifications globales quand les counts changent
   useEffect(() => {
     updateEngagementNotifications(engagementNotificationCount);
   }, [engagementNotificationCount, updateEngagementNotifications]);
@@ -110,10 +108,28 @@ function App() {
   useEffect(() => {
     updateEmployeeLoanNotifications(employeeLoanNotificationCount);
   }, [employeeLoanNotificationCount, updateEmployeeLoanNotifications]);
-  
 
-  const handleSelectGrant = (grantId: string) => {
+  // 🎯 REFS POUR ÉVITER LES BOUCLES
+  const isInitialLoad = useRef(true);
+  const isSaving = useRef(false);
+
+  // 🎯 FONCTION AMÉLIORÉE POUR SÉLECTIONNER ET SAUVEGARDER LA SUBVENTION
+  const handleSelectGrant = async (grantId: string) => {
+    console.log('🎯 User selected grant:', grantId);
     setSelectedGrantId(grantId);
+    
+    // Sauvegarder immédiatement la sélection utilisateur
+    try {
+      isSaving.current = true;
+      await appSettingsService.set('selectedGrantId', grantId);
+      localStorage.setItem('selectedGrantId', grantId);
+      console.log('💫 User grant selection saved:', grantId);
+    } catch (error) {
+      console.error('❌ Error saving user grant selection:', error);
+      localStorage.setItem('selectedGrantId', grantId);
+    } finally {
+      isSaving.current = false;
+    }
   };
 
   const loadAllData = useCallback(async () => {
@@ -121,7 +137,9 @@ function App() {
       setDataLoading(true);
       showLoading('Chargement des données...');
 
-      // Load all data in parallel
+      console.log('🔄 loadAllData - Début du chargement');
+
+      // Charger les données en parallèle
       const [
         grantsData,
         budgetLinesData,
@@ -134,7 +152,6 @@ function App() {
         employeeLoansData,
         usersData,
         rolesData,
-        selectedGrantSetting
       ] = await Promise.all([
         grantsService.getAll(),
         budgetLinesService.getAll(),
@@ -147,7 +164,6 @@ function App() {
         employeeLoansService.getAll(),
         usersService.getAll(),
         rolesService.getAll(),
-        appSettingsService.get('selectedGrantId')
       ]);
 
       setGrants(grantsData);
@@ -161,16 +177,15 @@ function App() {
       setEmployeeLoans(employeeLoansData);
       setUsers(usersData);
       setRoles(rolesData);
-      
-      // Set selected grant
-      if (selectedGrantSetting && grantsData.find(g => g.id === selectedGrantSetting)) {
-        setSelectedGrantId(selectedGrantSetting);
-      } else if (grantsData.length > 0) {
-        const mostRecentGrant = grantsData.reduce((latest, current) => 
-          new Date(current.startDate) > new Date(latest.startDate) ? current : latest
-        );
-        setSelectedGrantId(mostRecentGrant.id);
+
+      console.log('📊 Données chargées - Subventions:', grantsData.length);
+
+      // 🎯 CHARGEMENT INTELLIGENT DE LA SUBVENTION APRÈS LE CHARGEMENT DES DONNÉES
+      if (isInitialLoad.current && grantsData.length > 0) {
+        await loadInitialGrantSelection(grantsData);
+        isInitialLoad.current = false;
       }
+
     } catch (error) {
       console.error('Error loading data:', error);
       showError('Erreur de chargement', 'Impossible de charger les données. Veuillez rafraîchir la page.');
@@ -180,12 +195,76 @@ function App() {
     }
   }, []);
 
+  // 🎯 FONCTION SÉPARÉE POUR LE CHARGEMENT INITIAL
+  const loadInitialGrantSelection = async (grantsData: Grant[]) => {
+    try {
+      console.log('🔄 loadInitialGrantSelection - Début');
+      
+      // 1. Essayer de charger depuis Supabase
+      const savedGrantId = await appSettingsService.get('selectedGrantId');
+      console.log('💾 Saved grant from Supabase:', savedGrantId);
+      
+      // 2. Fallback localStorage
+      let grantToSelect = savedGrantId;
+      if (!grantToSelect && typeof window !== 'undefined') {
+        grantToSelect = localStorage.getItem('selectedGrantId') || '';
+        console.log('💾 Saved grant from localStorage:', grantToSelect);
+      }
+      
+      // 3. Vérifier que la subvention existe toujours
+      if (grantToSelect && grantsData.find(g => g.id === grantToSelect)) {
+        console.log('✅ Using existing saved grant:', grantToSelect);
+        setSelectedGrantId(grantToSelect);
+        return;
+      }
+      
+      // 4. Fallback: première subvention disponible
+      if (grantsData.length > 0) {
+        const firstGrant = grantsData[0];
+        grantToSelect = firstGrant.id;
+        console.log('🎯 Using first available grant:', grantToSelect);
+        setSelectedGrantId(grantToSelect);
+        
+        // 🚨 NE PAS SAUVEGARDER AUTOMATIQUEMENT ICI - seulement si c'est vraiment nécessaire
+        console.log('ℹ️  Initial grant selection - no auto-save to avoid loops');
+      }
+      
+    } catch (error) {
+      console.error('Error in loadInitialGrantSelection:', error);
+    }
+  };
+
   // Load data when user is authenticated
   useEffect(() => {
     if (userProfile) {
       loadAllData();
     }
   }, [userProfile, loadAllData]);
+
+  // 🎯 SAUVEGARDE AUTOMATIQUE UNIQUEMENT POUR LES CHANGEMENTS UTILISATEUR
+  useEffect(() => {
+    // Éviter la sauvegarde automatique pendant le chargement initial
+    if (isInitialLoad.current || isSaving.current || !selectedGrantId) {
+      return;
+    }
+
+    const saveSelectedGrant = async () => {
+      try {
+        isSaving.current = true;
+        console.log('💾 Auto-saving selected grant:', selectedGrantId);
+        await appSettingsService.set('selectedGrantId', selectedGrantId);
+        localStorage.setItem('selectedGrantId', selectedGrantId);
+      } catch (error) {
+        console.error('❌ Error auto-saving selected grant:', error);
+      } finally {
+        isSaving.current = false;
+      }
+    };
+
+    // Délai plus long pour éviter les conflits
+    const timer = setTimeout(saveSelectedGrant, 1000);
+    return () => clearTimeout(timer);
+  }, [selectedGrantId]);
 
   // Fallback to localStorage for demo data if Supabase is not available
   useEffect(() => {
@@ -213,17 +292,15 @@ function App() {
     }
   }, [userProfile]);
 
-  // Save selected grant to Supabase
+  // Debug effect pour suivre l'état de la subvention sélectionnée
   useEffect(() => {
-    if (userProfile && selectedGrantId) {
-      try {
-        appSettingsService.set('selectedGrantId', selectedGrantId);
-      } catch (error) {
-        console.error('Error saving selected grant:', error);
-      }
+    console.log('🔍 DEBUG - Current selectedGrantId:', selectedGrantId);
+    console.log('🔍 DEBUG - Available grants:', grants.length);
+    if (selectedGrantId) {
+      const selectedGrant = grants.find(g => g.id === selectedGrantId);
+      console.log('🔍 DEBUG - Selected grant:', selectedGrant?.name);
     }
-  }, [selectedGrantId, userProfile]);
-  
+  }, [selectedGrantId, grants]);
 
   // Form states
   const [showEngagementForm, setShowEngagementForm] = useState(false);
@@ -233,21 +310,6 @@ function App() {
   const [selectedEngagement, setSelectedEngagement] = useState<Engagement | null>(null);
   const [editingEngagement, setEditingEngagement] = useState<Engagement | null>(null);
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
-
-  // Initialize selectedGrantId with the most recent grant
-  useEffect(() => {
-  // Only set selectedGrantId if it's not already set and we have grants
-  if (!selectedGrantId && grants.length > 0) {
-    const mostRecentGrant = grants.reduce((latest, current) => 
-      new Date(current.startDate) > new Date(latest.startDate) ? current : latest
-    );
-    // Only update if different from current value
-    if (mostRecentGrant.id !== selectedGrantId) {
-      setSelectedGrantId(mostRecentGrant.id);
-    }
-  }
-}, [grants, selectedGrantId]); // Dépendances
-
 
   const isAdmin = () => {
     return userRole?.code === 'ADMIN';
@@ -317,7 +379,7 @@ function App() {
       });
       return updatedBudgetLines;
     });
-  }, [subBudgetLines]); // This effect ONLY depends on subBudgetLines
+  }, [subBudgetLines]);
 
   // Automatically update grant planned amounts when budget lines change
   useEffect(() => {
@@ -336,7 +398,7 @@ function App() {
       });
       return updatedGrants;
     });
-  }, [budgetLines]); // This effect ONLY depends on budgetLines
+  }, [budgetLines]);
 
   const handleLogout = () => {
     signOut();
@@ -346,125 +408,125 @@ function App() {
 
   // Grant management
   const handleAddGrant = async (grant: Omit<Grant, 'id'>) => {
-  try {
-    showLoading('Création de la subvention...');
-    
-    // Créer d'abord la subvention
-    const newGrant = await grantsService.create({
-      ...grant,
-      plannedAmount: 0
-    });
-    
-    setGrants(prev => [...prev, newGrant]);
-    
-    // ✅ Créer le compte bancaire UNIQUEMENT si la subvention a des infos bancaires
-    if (grant.bankAccount) {
-      try {
-        const accountId = `grant-${newGrant.id}`;
-        const newBankAccount = await bankAccountsService.create({
-          id: accountId, // Utiliser directement le bon ID
-          name: grant.bankAccount.name,
-          accountNumber: grant.bankAccount.accountNumber,
-          bankName: grant.bankAccount.bankName,
-          balance: grant.bankAccount.balance,
-          lastUpdateDate: new Date().toISOString().split('T')[0]
-        });
-        
-        setBankAccounts(prev => [...prev, newBankAccount]);
-      } catch (error) {
-        console.error('Error creating bank account for grant:', error);
-        // Ne pas bloquer la création de la subvention si le compte échoue
-        showToast('Subvention créée mais erreur avec le compte bancaire', 'warning');
+    try {
+      showLoading('Création de la subvention...');
+      
+      // Créer d'abord la subvention
+      const newGrant = await grantsService.create({
+        ...grant,
+        plannedAmount: 0
+      });
+      
+      setGrants(prev => [...prev, newGrant]);
+      
+      // ✅ Créer le compte bancaire UNIQUEMENT si la subvention a des infos bancaires
+      if (grant.bankAccount) {
+        try {
+          const accountId = `grant-${newGrant.id}`;
+          const newBankAccount = await bankAccountsService.create({
+            id: accountId,
+            name: grant.bankAccount.name,
+            accountNumber: grant.bankAccount.accountNumber,
+            bankName: grant.bankAccount.bankName,
+            balance: grant.bankAccount.balance,
+            lastUpdateDate: new Date().toISOString().split('T')[0]
+          });
+          
+          setBankAccounts(prev => [...prev, newBankAccount]);
+        } catch (error) {
+          console.error('Error creating bank account for grant:', error);
+          // Ne pas bloquer la création de la subvention si le compte échoue
+          showToast('Subvention créée mais erreur avec le compte bancaire', 'warning');
+        }
       }
+      
+      // Auto-select the new grant if it's the first one or if admin
+      if (grants.length === 0 || isAdmin()) {
+        handleSelectGrant(newGrant.id);
+      }
+      
+      showSuccess('Subvention ajoutée', 'La nouvelle subvention a été créée avec succès');
+    } catch (error) {
+      showError('Erreur', 'Impossible de créer la subvention');
+    } finally {
+      closeLoading();
     }
-    
-    // Auto-select the new grant if it's the first one or if admin
-    if (grants.length === 0 || isAdmin()) {
-      setSelectedGrantId(newGrant.id);
-    }
-    
-    showSuccess('Subvention ajoutée', 'La nouvelle subvention a été créée avec succès');
-  } catch (error) {
-    showError('Erreur', 'Impossible de créer la subvention');
-  } finally {
-    closeLoading();
-  }
-};
+  };
 
   const handleUpdateGrant = async (id: string, updates: Partial<Grant>) => {
-  try {
-    await grantsService.update(id, updates);
-    setGrants(prev => prev.map(grant => 
-      grant.id === id ? { ...grant, ...updates } : grant
-    ));
+    try {
+      await grantsService.update(id, updates);
+      setGrants(prev => prev.map(grant => 
+        grant.id === id ? { ...grant, ...updates } : grant
+      ));
 
-    // ✅ Mettre à jour le compte bancaire associé si les infos bancaires changent
-    if (updates.bankAccount) {
-      const accountId = `grant-${id}`;
-      const existingAccount = bankAccounts.find(acc => acc.id === accountId);
+      // ✅ Mettre à jour le compte bancaire associé si les infos bancaires changent
+      if (updates.bankAccount) {
+        const accountId = `grant-${id}`;
+        const existingAccount = bankAccounts.find(acc => acc.id === accountId);
+        
+        if (existingAccount) {
+          // Mettre à jour le compte existant
+          await bankAccountsService.update(accountId, {
+            name: updates.bankAccount.name,
+            accountNumber: updates.bankAccount.accountNumber,
+            bankName: updates.bankAccount.bankName,
+            balance: updates.bankAccount.balance
+          });
+          
+          setBankAccounts(prev => prev.map(acc => 
+            acc.id === accountId ? { ...acc, ...updates.bankAccount } : acc
+          ));
+        } else if (updates.bankAccount) {
+          // Créer un nouveau compte si il n'existe pas mais que des infos sont fournies
+          const newBankAccount = await bankAccountsService.create({
+            id: accountId,
+            name: updates.bankAccount.name,
+            accountNumber: updates.bankAccount.accountNumber,
+            bankName: updates.bankAccount.bankName,
+            balance: updates.bankAccount.balance,
+            lastUpdateDate: new Date().toISOString().split('T')[0]
+          });
+          
+          setBankAccounts(prev => [...prev, newBankAccount]);
+        }
+      }
       
-      if (existingAccount) {
-        // Mettre à jour le compte existant
-        await bankAccountsService.update(accountId, {
-          name: updates.bankAccount.name,
-          accountNumber: updates.bankAccount.accountNumber,
-          bankName: updates.bankAccount.bankName,
-          balance: updates.bankAccount.balance
-        });
-        
-        setBankAccounts(prev => prev.map(acc => 
-          acc.id === accountId ? { ...acc, ...updates.bankAccount } : acc
-        ));
-      } else if (updates.bankAccount) {
-        // Créer un nouveau compte si il n'existe pas mais que des infos sont fournies
-        const newBankAccount = await bankAccountsService.create({
-          id: accountId,
-          name: updates.bankAccount.name,
-          accountNumber: updates.bankAccount.accountNumber,
-          bankName: updates.bankAccount.bankName,
-          balance: updates.bankAccount.balance,
-          lastUpdateDate: new Date().toISOString().split('T')[0]
-        });
-        
-        setBankAccounts(prev => [...prev, newBankAccount]);
-      }
+      showSuccess('Subvention modifiée', 'Les modifications ont été enregistrées');
+    } catch (error) {
+      console.error('Erreur', 'Impossible de modifier la subvention');
     }
-    
-    showSuccess('Subvention modifiée', 'Les modifications ont été enregistrées');
-  } catch (error) {
-    console.error('Erreur', 'Impossible de modifier la subvention');
-  }
-};
+  };
 
- const handleDeleteGrant = async (id: string) => {
-  try {
-    await grantsService.delete(id);
-    setGrants(prev => prev.filter(grant => grant.id !== id));
-    
-    // ✅ Supprimer le compte bancaire associé
-    const accountId = `grant-${id}`;
-    const accountToDelete = bankAccounts.find(acc => acc.id === accountId);
-    if (accountToDelete) {
-      await bankAccountsService.delete(accountId);
-      setBankAccounts(prev => prev.filter(acc => acc.id !== accountId));
-    }
-    
-    if (selectedGrantId === id) {
-      const remainingGrants = grants.filter(grant => grant.id !== id);
-      if (remainingGrants.length > 0) {
-        const mostRecent = remainingGrants.reduce((latest, current) => 
-          new Date(current.startDate) > new Date(latest.startDate) ? current : latest
-        );
-        setSelectedGrantId(mostRecent.id);
-      } else {
-        setSelectedGrantId('');
+  const handleDeleteGrant = async (id: string) => {
+    try {
+      await grantsService.delete(id);
+      setGrants(prev => prev.filter(grant => grant.id !== id));
+      
+      // ✅ Supprimer le compte bancaire associé
+      const accountId = `grant-${id}`;
+      const accountToDelete = bankAccounts.find(acc => acc.id === accountId);
+      if (accountToDelete) {
+        await bankAccountsService.delete(accountId);
+        setBankAccounts(prev => prev.filter(acc => acc.id !== accountId));
       }
+      
+      if (selectedGrantId === id) {
+        const remainingGrants = grants.filter(grant => grant.id !== id);
+        if (remainingGrants.length > 0) {
+          // Sélectionner automatiquement la première subvention disponible
+          handleSelectGrant(remainingGrants[0].id);
+        } else {
+          setSelectedGrantId('');
+        }
+      }
+      showSuccess('Subvention supprimée', 'La subvention a été supprimée avec succès');
+    } catch (error) {
+      showError('Erreur', 'Impossible de supprimer la subvention');
     }
-    showSuccess('Subvention supprimée', 'La subvention a été supprimée avec succès');
-  } catch (error) {
-    showError('Erreur', 'Impossible de supprimer la subvention');
-  }
-};
+  };
+
+  // ... (les autres fonctions de gestion restent inchangées)
   // Budget line management
   const handleAddBudgetLine = async (budgetLine: Omit<BudgetLine, 'id' | 'engagedAmount' | 'availableAmount'>) => {
     try {
@@ -580,55 +642,55 @@ function App() {
   };
 
   const handleUpdateEngagement = async (id: string, updates: Partial<Engagement>) => {
-  try {
-    const oldEngagement = engagements.find(eng => eng.id === id);
-    if (!oldEngagement) return;
+    try {
+      const oldEngagement = engagements.find(eng => eng.id === id);
+      if (!oldEngagement) return;
 
-    await engagementsService.update(id, updates);
-    setEngagements(prev => prev.map(eng => 
-      eng.id === id ? { ...eng, ...updates } : eng
-    ));
+      await engagementsService.update(id, updates);
+      setEngagements(prev => prev.map(eng => 
+        eng.id === id ? { ...eng, ...updates } : eng
+      ));
 
-    // If amount changed, update budget line amounts
-    if (updates.amount !== undefined && updates.amount !== oldEngagement.amount) {
-      const amountDifference = updates.amount - oldEngagement.amount;
+      // If amount changed, update budget line amounts
+      if (updates.amount !== undefined && updates.amount !== oldEngagement.amount) {
+        const amountDifference = updates.amount - oldEngagement.amount;
 
-      // Update sub budget line
-      const subBudgetLine = subBudgetLines.find(line => line.id === oldEngagement.subBudgetLineId);
-      if (subBudgetLine) {
-        const newEngagedAmount = subBudgetLine.engagedAmount + amountDifference;
-        const subUpdates = {
-          engagedAmount: newEngagedAmount,
-          availableAmount: subBudgetLine.notifiedAmount - newEngagedAmount
-        };
-        await subBudgetLinesService.update(oldEngagement.subBudgetLineId, subUpdates);
-        setSubBudgetLines(prev => prev.map(line => 
-          line.id === oldEngagement.subBudgetLineId ? { ...line, ...subUpdates } : line
-        ));
+        // Update sub budget line
+        const subBudgetLine = subBudgetLines.find(line => line.id === oldEngagement.subBudgetLineId);
+        if (subBudgetLine) {
+          const newEngagedAmount = subBudgetLine.engagedAmount + amountDifference;
+          const subUpdates = {
+            engagedAmount: newEngagedAmount,
+            availableAmount: subBudgetLine.notifiedAmount - newEngagedAmount
+          };
+          await subBudgetLinesService.update(oldEngagement.subBudgetLineId, subUpdates);
+          setSubBudgetLines(prev => prev.map(line => 
+            line.id === oldEngagement.subBudgetLineId ? { ...line, ...subUpdates } : line
+          ));
+        }
+
+        // Update budget line
+        const budgetLine = budgetLines.find(line => line.id === oldEngagement.budgetLineId);
+        if (budgetLine) {
+          const newEngagedAmount = budgetLine.engagedAmount + amountDifference;
+          const budgetUpdates = {
+            engagedAmount: newEngagedAmount,
+            availableAmount: budgetLine.notifiedAmount - newEngagedAmount
+          };
+          await budgetLinesService.update(oldEngagement.budgetLineId, budgetUpdates);
+          setBudgetLines(prev => prev.map(line => 
+            line.id === oldEngagement.budgetLineId ? { ...line, ...budgetUpdates } : line
+          ));
+        }
       }
 
-      // Update budget line - FIXED HERE
-      const budgetLine = budgetLines.find(line => line.id === oldEngagement.budgetLineId);
-      if (budgetLine) {
-        const newEngagedAmount = budgetLine.engagedAmount + amountDifference; // ✅ Use budgetLine instead of line
-        const budgetUpdates = {
-          engagedAmount: newEngagedAmount,
-          availableAmount: budgetLine.notifiedAmount - newEngagedAmount
-        };
-        await budgetLinesService.update(oldEngagement.budgetLineId, budgetUpdates);
-        setBudgetLines(prev => prev.map(line => 
-          line.id === oldEngagement.budgetLineId ? { ...line, ...budgetUpdates } : line
-        ));
-      }
+      showSuccess('Engagement modifié', 'Les modifications ont été enregistrées');
+      setShowEngagementForm(false);
+      setEditingEngagement(null);
+    } catch (error) {
+      showError('Erreur', 'Impossible de modifier l\'engagement');
     }
-
-    showSuccess('Engagement modifié', 'Les modifications ont été enregistrées');
-    setShowEngagementForm(false);
-    setEditingEngagement(null);
-  } catch (error) {
-    showError('Erreur', 'Impossible de modifier l\'engagement');
-  }
-};
+  };
 
   // Payment management
   const handleAddPayment = async (paymentData: Omit<Payment, 'id'>) => {
@@ -656,7 +718,6 @@ function App() {
               if (approvals?.supervisor2?.signature) {
                   finalApprovals.supervisor2 = approvals.supervisor2;
               }
-              // La signature du Coordonnateur National est intentionnellement exclue à la création
 
               const paymentToCreate = {
                   ...paymentData,
@@ -677,7 +738,6 @@ function App() {
       }
   };
 
-  
   const handleUpdatePayment = async (id: string, updates: Partial<Payment>) => {
     try {
       await paymentsService.update(id, updates);
@@ -690,19 +750,16 @@ function App() {
     }
   };
 
-
   const handleSignPayment = async (paymentId: string, updates: Partial<Payment>) => {
     try {
       await paymentsService.update(paymentId, updates);
       setPayments(prev => prev.map(payment =>
         payment.id === paymentId ? { ...payment, ...updates } : payment
       ));
-      // Pas de message de succès ici, car il sera affiché dans le formulaire
     } catch (error) {
       showError('Erreur', 'Impossible d\'enregistrer la signature');
     }
   };
-
 
   // Treasury management
   const handleDeleteBankAccount = async (id: string) => {
@@ -721,48 +778,50 @@ function App() {
     }
   };
 
+  // Fonction handleAddBankTransaction
   const handleAddBankTransaction = async (transaction: Omit<BankTransaction, 'id'>) => {
     try {
       const newTransaction = await bankTransactionsService.create(transaction);
       setBankTransactions(prev => [...prev, newTransaction]);
     
-      // Mettre à jour le solde du compte bancaire
-      const account = bankAccounts.find(acc => acc.id === transaction.accountId);
-      if (account) {
-        const newBalance = transaction.type === 'credit' 
-          ? account.balance + transaction.amount
-          : account.balance - transaction.amount;
-      
-        await bankAccountsService.update(transaction.accountId, {
-          balance: newBalance,
-          lastUpdateDate: new Date().toISOString().split('T')[0]
-        });
+      // Mettre à jour le solde de la subvention si c'est une transaction sur un compte de subvention
+      if (transaction.accountId.startsWith('grant-')) {
+        const grantId = transaction.accountId.replace('grant-', '');
+        const grant = grants.find(g => g.id === grantId);
         
-        setBankAccounts(prev => prev.map(acc => 
-          acc.id === transaction.accountId 
-            ? { ...acc, balance: newBalance, lastUpdateDate: new Date().toISOString().split('T')[0] }
-            : acc
-        ));
-      
-        // Si c'est un compte lié à une subvention, mettre à jour aussi la subvention
-        if (transaction.accountId.startsWith('grant-')) {
-          const grantId = transaction.accountId.replace('grant-', '');
-          const grant = grants.find(g => g.id === grantId);
-          if (grant && grant.bankAccount) {
-            await grantsService.update(grantId, {
-              bankAccount: { ...grant.bankAccount, balance: newBalance }
-            });
-            setGrants(prev => prev.map(g => 
-              g.id === grantId && g.bankAccount
-                ? { ...g, bankAccount: { ...g.bankAccount, balance: newBalance } }
-                : g
-            ));
-          }
+        if (grant && grant.bankAccount) {
+          const newBalance = transaction.type === 'credit' 
+            ? grant.bankAccount.balance + transaction.amount
+            : grant.bankAccount.balance - transaction.amount;
+
+          // Mettre à jour la subvention
+          await grantsService.update(grantId, {
+            bankAccount: {
+              ...grant.bankAccount,
+              balance: newBalance,
+              lastUpdateDate: new Date().toISOString().split('T')[0]
+            }
+          });
+          
+          // Mettre à jour l'état local
+          setGrants(prev => prev.map(g => 
+            g.id === grantId && g.bankAccount
+              ? { 
+                  ...g, 
+                  bankAccount: { 
+                    ...g.bankAccount, 
+                    balance: newBalance,
+                    lastUpdateDate: new Date().toISOString().split('T')[0]
+                  } 
+                }
+              : g
+          ));
         }
       }
       
       showSuccess('Transaction ajoutée', 'La transaction a été enregistrée et le solde mis à jour');
     } catch (error) {
+      console.error('Erreur détaillée:', error);
       showError('Erreur', 'Impossible d\'ajouter la transaction');
     }
   };
@@ -991,7 +1050,6 @@ function App() {
     }
   };
 
-
   const handleEditEngagement = (engagement: Engagement) => {
     const subBudgetLine = subBudgetLines.find(line => line.id === engagement.subBudgetLineId);
     if (subBudgetLine) {
@@ -1018,7 +1076,6 @@ function App() {
     }
   };
 
-
   const handleEditPayment = (paymentId: string) => {
     const payment = payments.find(p => p.id === paymentId);
     if (payment) {
@@ -1034,25 +1091,12 @@ function App() {
   const handleViewPaymentDetails = (paymentId: string) => {
     const payment = payments.find(p => p.id === paymentId);
     if (payment) {
-      setSelectedPaymentForView(payment); // Cette fonction doit maintenant exister
-      // Si vous avez un état pour afficher les détails, activez-le aussi
+      setSelectedPaymentForView(payment);
       setShowPaymentDetails(true);
     } else {
       console.error('Paiement non trouvé:', paymentId);
     }
   };
-
-  // const handleViewPaymentDetails = (paymentId: string) => {
-  //   const payment = payments.find(p => p.id === paymentId);
-  //   if (payment) {
-  //     setEditingPayment(payment);
-  //     const engagement = engagements.find(eng => eng.id === payment.engagementId);
-  //     if (engagement) {
-  //       setSelectedEngagement(engagement);
-  //       setShowPaymentForm(true);
-  //     }
-  //   }
-  // };
 
   // Show loading screen while checking authentication
   if (authLoading) {
@@ -1148,8 +1192,6 @@ function App() {
     hasModuleAccess(item.module)
   );
 
-
-
   if (!userProfile) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center">
@@ -1161,38 +1203,35 @@ function App() {
 }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      {/* Header - Fixed */}
+      <header className="bg-gradient-to-r from-indigo-700 to-purple-800 shadow-xl border-b border-indigo-600 fixed top-0 left-0 right-0 z-50">
+        <div className=" mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center space-x-4">
               <div className="flex items-center space-x-3">
-                <div className="p-2 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl">
-                  <Target className="w-6 h-6 text-white" />
-                </div>
-                <div className="p-2 bg-gradient-to-r to-purple-600 rounded-xl">
-                  <div className="relative w-20 h-15">
+                <div className="p-2 bg-white/10 backdrop-blur-sm rounded-xl border border-white/20">
+                  <div className="relative w-20 h-8">
                     <img
-                      src="/logo.png"
+                      src="/budgetbase/logo.png"
                       alt="Logo"
                       className="object-contain"
                     />
                   </div>
                 </div>
                 <div className="hidden sm:block">
-                  <h1 className="text-xl font-bold text-gray-900">Budget BASE</h1>
-                  <p className="text-xs text-gray-500">Gestion Budgétaire</p>
+                  <h1 className="text-xl font-bold text-white">Budget BASE</h1>
+                  <p className="text-xs text-indigo-200">Gestion Budgétaire Intelligente</p>
                 </div>
               </div>
 
-              {/* Global Grant Selector for Admin */}
-              {isAdmin() && selectedGrant && (
-                <div className="hidden md:flex items-center space-x-3 bg-blue-50 px-4 py-2 rounded-xl border border-blue-200">
-                  <Settings className="w-4 h-4 text-blue-600" />
+              {/* Global Grant Selector */}
+              {selectedGrant && (
+                <div className="hidden md:flex items-center space-x-3 bg-white/10 backdrop-blur-sm px-4 py-2 rounded-xl border border-white/20">
+                  <Settings className="w-4 h-4 text-indigo-200" />
                   <div>
-                    <p className="text-xs text-blue-600 font-medium">Subvention Active</p>
-                    <p className="text-sm font-semibold text-blue-900">{selectedGrant.name}</p>
+                    <p className="text-xs text-indigo-200 font-medium">Subvention Active</p>
+                    <p className="text-sm font-semibold text-white">{selectedGrant.name}</p>
                   </div>
                 </div>
               )}
@@ -1203,17 +1242,16 @@ function App() {
               <div className="hidden md:block">
                 {hasAnyNotifications && (
                   <div className="relative">
-                    <div className="flex items-center space-x-2 bg-orange-50 border border-orange-200 rounded-full px-3 py-1">
-                      <AlertTriangle className="w-4 h-4 text-orange-600" />
-                      <span className="text-sm font-medium text-orange-800">
+                    <div className="flex items-center space-x-2 bg-orange-500/90 backdrop-blur-sm border border-orange-300 rounded-full px-3 py-1 shadow-lg">
+                      <AlertTriangle className="w-4 h-4 text-white" />
+                      <span className="text-sm font-medium text-white">
                         {totalNotifications} signature(s) en attente
                       </span>
-                      
                     </div>
                     <div className="absolute -top-1 -right-1">
                       <span className="flex h-3 w-3">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-3 w-3 bg-orange-500"></span>
+                        <span className="relative inline-flex rounded-full h-3 w-3 bg-white"></span>
                       </span>
                     </div>
                   </div>
@@ -1224,11 +1262,11 @@ function App() {
               <div className="md:hidden">
                 {hasAnyNotifications && (
                   <div className="relative">
-                    <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
-                      <AlertTriangle className="w-5 h-5 text-orange-500" />
+                    <button className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors backdrop-blur-sm">
+                      <AlertTriangle className="w-5 h-5" />
                       <span className="absolute -top-1 -right-1 flex h-4 w-4">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-4 w-4 bg-orange-500 text-xs text-white font-bold items-center justify-center">
+                        <span className="relative inline-flex rounded-full h-4 w-4 bg-white text-xs text-orange-600 font-bold items-center justify-center">
                           {totalNotifications}
                         </span>
                       </span>
@@ -1238,125 +1276,136 @@ function App() {
               </div>
 
               {/* Mobile menu button */}
-              {/* <button
-                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                className="lg:hidden p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-              </button> */}
-              {/* Mobile menu button */}
               <button
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                className="xl:hidden p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                className="xl:hidden p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors backdrop-blur-sm"
               >
                 {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
               </button>
 
               <div className="hidden xl:block text-right">
-                <p className="text-sm font-medium text-gray-900">
+                <p className="text-sm font-medium text-white">
                   {userProfile.firstName} {userProfile.lastName}
                 </p>
-                <p className="text-xs text-gray-500">{userRole?.name}</p>
+                <p className="text-xs text-indigo-200">{userRole?.name}</p>
               </div>
+              <button
+                onClick={handleLogout}
+                className="hidden lg:block p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors backdrop-blur-sm"
+                title="Déconnexion"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
             </div>
           </div>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex space-x-8">
-          {/* Sidebar */}
-          <div className={`${isMobileMenuOpen ? 'block' : 'hidden'} xl:block w-64 flex-shrink-0 fixed xl:relative inset-y-0 left-0 z-50 xl:z-auto bg-white xl:bg-transparent overflow-y-auto pt-16 xl:pt-0`}>
-            <nav className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 h-full lg:h-auto max-h-screen lg:max-h-none overflow-y-auto">
-              {/* Mobile Header Info */}
-              <div className="xl:hidden mb-6 pb-4 border-b border-gray-200">
-                <div className="flex items-center space-x-3 mb-4">
-                  <div className="p-2 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl">
-                    <Target className="w-6 h-6 text-white" />
-                  </div>
-                  <div>
-                    <h1 className="text-lg font-bold text-gray-900">Budget BASE</h1>
-                    <p className="text-xs text-gray-500">Gestion Budgétaire</p>
-                  </div>
-                </div>
-                
-                <div className="bg-blue-50 px-3 py-2 rounded-lg">
-                  <p className="text-sm font-medium text-gray-900">
-                    {userProfile.firstName} {userProfile.lastName}
-                  </p>
-                  <p className="text-xs text-gray-500">{userRole?.name}</p>
+      {/* Main Content Area */}
+      <div className="flex flex-1 pt-16">
+        {/* Sidebar - Fixed with independent scrolling */}
+        <div className={`${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} xl:translate-x-0 fixed xl:sticky top-16 left-0 h-[calc(100vh-4rem)] w-80 bg-gradient-to-b from-indigo-800 to-purple-900 shadow-2xl border-r border-indigo-700/50 transform transition-transform duration-300 ease-in-out z-40 flex flex-col`}>
+          {/* Mobile Header Info */}
+          <div className="xl:hidden p-6 border-b border-indigo-700/50">
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="p-2 bg-white/10 backdrop-blur-sm rounded-xl border border-white/20">
+                <div className="relative w-20 h-8">
+                  <img
+                    src="/budgetbase/logo.png"
+                    alt="Logo"
+                    className="object-contain"
+                  />
                 </div>
               </div>
-
-              <div className="space-y-2">
-                {availableMenuItems.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => {
-                        setActiveTab(item.id);
-                        setIsMobileMenuOpen(false);
-                      }}
-                      className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-left transition-all duration-200 ${
-                        activeTab === item.id
-                          ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg'
-                          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-3">
-                        <Icon className="w-5 h-5" />
-                        <span className="font-medium">{item.label}</span>
-                      </div>
-                      
-                      {/* Badge de notification */}
-                      {item.notificationCount && item.notificationCount > 0 && (
-                        <span className={`inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none rounded-full ${
-                          activeTab === item.id 
-                            ? 'bg-white text-purple-600' 
-                            : 'bg-orange-500 text-white'
-                        }`}>
-                          {item.notificationCount}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-                
-               
-                
-                {/* Logout Button - Only for mobile */}
-                <div className="xl:hidden pt-4 border-t border-gray-200">
-                  <button
-                    onClick={() => {
-                      handleLogout();
-                      setIsMobileMenuOpen(false);
-                    }}
-                    className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-left transition-all duration-200 text-red-600 hover:bg-red-50"
-                  >
-                    <LogOut className="w-5 h-5" />
-                    <span className="font-medium">Déconnexion</span>
-                  </button>
-                </div>
+              <div>
+                <h1 className="text-lg font-bold text-white">Budget BASE</h1>
+                <p className="text-xs text-indigo-200">Gestion Budgétaire</p>
               </div>
-            </nav>
+            </div>
+            
+            <div className="bg-white/10 backdrop-blur-sm px-3 py-2 rounded-lg border border-white/20">
+              <p className="text-sm font-medium text-white">
+                {userProfile.firstName} {userProfile.lastName}
+              </p>
+              <p className="text-xs text-indigo-200">{userRole?.name}</p>
+            </div>
           </div>
 
-          {/* Mobile overlay */}
-          {isMobileMenuOpen && (
-            <div 
-              className="xl:hidden fixed inset-0 bg-black bg-opacity-50 z-40"
-              onClick={() => setIsMobileMenuOpen(false)}
-            />
-          )}
+          {/* Navigation avec défilement indépendant */}
+          <nav className="flex-1 overflow-y-auto py-6 px-4">
+            <div className="space-y-2">
+              {availableMenuItems.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-left transition-all duration-200 group ${
+                      activeTab === item.id
+                        ? 'bg-gradient-to-r from-white/20 to-white/10 backdrop-blur-sm border border-white/20 shadow-lg'
+                        : 'text-indigo-100 hover:bg-white/5 hover:text-white border border-transparent'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <Icon className={`w-5 h-5 transition-colors ${
+                        activeTab === item.id ? 'text-white' : 'text-indigo-300 group-hover:text-white'
+                      }`} />
+                      <span className="font-medium">{item.label}</span>
+                    </div>
+                    
+                    {/* Badge de notification */}
+                    {item.notificationCount && item.notificationCount > 0 && (
+                      <span className={`inline-flex items-center justify-center min-w-6 h-6 px-2 text-xs font-bold leading-none rounded-full transition-all ${
+                        activeTab === item.id 
+                          ? 'bg-white text-purple-600 shadow-lg' 
+                          : 'bg-orange-500 text-white group-hover:bg-orange-400'
+                      }`}>
+                        {item.notificationCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
 
-          {/* Main Content */}
-          <div className="flex-1 xl:ml-8 w-full">
+          {/* Logout Button - Only for mobile */}
+          <div className="xl:hidden p-4 border-t border-indigo-700/50 bg-indigo-900/50">
+            <button
+              onClick={() => {
+                handleLogout();
+                setIsMobileMenuOpen(false);
+              }}
+              className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-left transition-all duration-200 text-red-300 hover:bg-red-500/20 hover:text-red-100 border border-transparent hover:border-red-400/30"
+            >
+              <LogOut className="w-5 h-5" />
+              <span className="font-medium">Déconnexion</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Mobile overlay */}
+        {isMobileMenuOpen && (
+          <div 
+            className="xl:hidden fixed inset-0 bg-black bg-opacity-50 z-30"
+            onClick={() => setIsMobileMenuOpen(false)}
+          />
+        )}
+
+        {/* Main Content */}
+        <div className="flex-1 min-w-0 xl:ml-0">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             {activeTab === 'dashboard' && (
               <Dashboard 
                 grants={[selectedGrant].filter(Boolean) as Grant[]}
                 budgetLines={filteredData.budgetLines}
                 subBudgetLines={filteredData.subBudgetLines}
+                payments={payments}
+                prefinancings={prefinancings}
+                employeeLoans={employeeLoans}
                 engagements={filteredData.engagements}
               />
             )}
@@ -1366,21 +1415,22 @@ function App() {
                 grants={grants}
                 budgetLines={budgetLines}
                 subBudgetLines={subBudgetLines}
+                payments={payments}
+                prefinancings={prefinancings}
+                employeeLoans={employeeLoans}
                 onAddGrant={handleAddGrant}
                 onUpdateGrant={handleUpdateGrant}
                 onDeleteGrant={handleDeleteGrant}
                 onUpdateBudgetLine={handleUpdateBudgetLine}
                 onUpdateSubBudgetLine={handleUpdateSubBudgetLine}
-
               />
             )}
             
-
             {activeTab === 'globalConfig' && (
               <GrantSelector
                 grants={grants}
                 selectedGrantId={selectedGrantId}
-                onSelectGrant={setSelectedGrantId}
+                onSelectGrant={handleSelectGrant}
                 isAdmin={isAdmin()}
               />
             )}
@@ -1407,6 +1457,9 @@ function App() {
               <BudgetTracking
                 budgetLines={filteredData.budgetLines}
                 subBudgetLines={filteredData.subBudgetLines}
+                payments={payments}
+                prefinancings={prefinancings}
+                employeeLoans={employeeLoans}
                 grants={[selectedGrant].filter(Boolean) as Grant[]}
                 engagements={filteredData.engagements}
                 selectedGrantId={selectedGrantId}
@@ -1443,14 +1496,12 @@ function App() {
             )}
 
             {activeTab === 'treasury' && (
-              <TreasuryManager
+             <TreasuryManager
                 payments={filteredData.payments}
-                bankAccounts={bankAccounts}
                 bankTransactions={bankTransactions}
                 selectedGrant={selectedGrant}
-                onDeleteBankAccount={handleDeleteBankAccount}
                 onAddBankTransaction={handleAddBankTransaction}
-                onUpdateBankAccount={handleUpdateBankAccount}
+                onUpdateGrant={handleUpdateGrant}
               />
             )}
 

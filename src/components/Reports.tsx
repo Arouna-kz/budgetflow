@@ -46,7 +46,6 @@ const Reports: React.FC<ReportsProps> = ({
   const canView = hasPermission('reports', 'view');
   const canExport = hasPermission('reports', 'export');
   const canViewDetails = hasPermission('reports', 'view_details');
-  // const canViewFinancial = hasPermission('reports', 'view_financial');
 
   // === DÉTECTION RESPONSIVE ===
   useEffect(() => {
@@ -176,8 +175,6 @@ const Reports: React.FC<ReportsProps> = ({
     return filterByDate(prefinancingDate);
   });
 
-   
-
   const filteredBudgetLines = budgetLines;
 
   const selectedGrantData = selectedGrant;
@@ -217,7 +214,6 @@ const Reports: React.FC<ReportsProps> = ({
 
   // État des bénéficiaires avances/prêt
   const getBeneficiariesState = () => {
-    
     const beneficiaries = new Map();
     
     filteredEmployeeLoans.forEach(loan => {
@@ -249,7 +245,6 @@ const Reports: React.FC<ReportsProps> = ({
 
   // État des fournisseurs payés
   const getPaidSuppliersState = () => {
-    
     const suppliers = new Map();
     
     filteredPayments.filter(payment => payment.status === 'paid' || payment.status === 'cashed').forEach(payment => {
@@ -289,7 +284,6 @@ const Reports: React.FC<ReportsProps> = ({
 
   // État des fournisseurs en attente de paiements
   const getPendingSuppliersState = () => {
-    
     const suppliers = new Map();
     
     const approvedEngagements = filteredExpenses.filter(engagement => 
@@ -463,7 +457,7 @@ const Reports: React.FC<ReportsProps> = ({
     </div>
   );
 
-  // Styles d'impression
+  // Styles d'impression avec logo
   const PrintStyles = () => (
     <style jsx>{`
       @media print {
@@ -502,6 +496,16 @@ const Reports: React.FC<ReportsProps> = ({
           margin-bottom: 20px;
           border-bottom: 2px solid #000;
           padding-bottom: 15px;
+        }
+        
+        .print-logo {
+          text-align: center;
+          margin-bottom: 15px;
+        }
+        
+        .print-logo img {
+          max-height: 60px;
+          max-width: 200px;
         }
         
         .print-organization {
@@ -594,7 +598,6 @@ const Reports: React.FC<ReportsProps> = ({
     `}</style>
   );
 
-
   // Fonction pour gérer l'exportation PDF
   const handleExportPDF = () => {
     // Préparer le document pour l'impression
@@ -610,13 +613,21 @@ const Reports: React.FC<ReportsProps> = ({
     }, 1000);
   };
 
-
   return (
     <div className="space-y-4 sm:space-y-6 p-3 sm:p-4 print:bg-white print-container">
       <PrintStyles />
 
-      {/* En-tête d'impression */}
+      {/* En-tête d'impression avec logo */}
       <div className="hidden print:block print-header">
+        {/* Logo ajouté ici */}
+        <div className="print-logo">
+          <img 
+            src="/budgetbase/logo.png" 
+            alt="Logo BudgetBase" 
+            className="print-logo-img"
+          />
+        </div>
+        
         <div className="print-organization">
           CELLULE DE COORDINATION DE LA COOPÉRATION CÔTE D'IVOIRE-UNION EUROPÉENNE
         </div>
