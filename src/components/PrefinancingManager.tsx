@@ -1334,25 +1334,36 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                       </td>
                       <td className="px-4 py-4 text-center">
                         {canModifyStatus() ? (
-                          <select
-                            value={prefinancing.status}
-                            onChange={(e) => updatePrefinancingStatus(prefinancing.id, e.target.value as Prefinancing['status'])}
-                            className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PREFINANCING_STATUS[prefinancing.status].color}`}
-                          >
-                            <option value="pending">En attente</option>
-                            <option value="approved">Approuvé</option>
-                            <option value="rejected">Rejeté</option>
-                          </select>
+                          <>
+                            <select
+                              value={prefinancing.status}
+                              onChange={(e) => updatePrefinancingStatus(prefinancing.id, e.target.value as Prefinancing['status'])}
+                              className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PREFINANCING_STATUS[prefinancing.status].color}`}
+                            >
+                              <option value="pending">En attente</option>
+                              <option value="approved">Approuvé</option>
+                              <option value="rejected">Rejeté</option>
+                            </select>
+                            <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PREFINANCING_STATUS[prefinancing.status].color}`}>
+                              {PREFINANCING_STATUS[prefinancing.status].label}
+                            </span>
+                          </>
                         ): canModifyStatusComptable() ? (
-                          <select
-                            value={prefinancing.status}
-                            onChange={(e) => updatePrefinancingStatus(prefinancing.id, e.target.value as Prefinancing['status'])}
-                            className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PREFINANCING_STATUS[prefinancing.status].color}`}
-                          >
-                            <option value="pending">En attente</option>
-                            <option value="paid">Décaissé</option>
-                            <option value="repaid">Remboursé</option>
-                          </select>
+                          <>
+                            {prefinancing.status === 'approved' || prefinancing.status === 'paid' || prefinancing.status === 'repaid'? (
+                              <select
+                                value={prefinancing.status}
+                                onChange={(e) => updatePrefinancingStatus(prefinancing.id, e.target.value as Prefinancing['status'])}
+                                className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PREFINANCING_STATUS[prefinancing.status].color}`}
+                              >
+                                <option value="paid">Décaissé</option>
+                                <option value="repaid">Remboursé</option>
+                              </select>
+                            ):''}
+                            <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PREFINANCING_STATUS[prefinancing.status].color}`}>
+                              {PREFINANCING_STATUS[prefinancing.status].label}
+                            </span>
+                          </>
                         ):(
                           <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PREFINANCING_STATUS[prefinancing.status].color}`}>
                             {PREFINANCING_STATUS[prefinancing.status].label}
@@ -1361,7 +1372,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                       </td>
                       <td className="px-4 py-4 text-center">
                         <div className="flex items-center justify-center space-x-1">
-                          {prefinancing.status === 'paid' && remainingAmount > 0 && canEdit && (
+                          {prefinancing.status === 'paid' && remainingAmount > 0 && canEdit && userProfession === 'Comptable' && (
                             <button
                               onClick={() => {
                                 setSelectedPrefinancing(prefinancing);
@@ -1823,23 +1834,27 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                       </p>
                     </div>
                   ) : canModifyStatusComptable() ? (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Statut (Comptable)
-                      </label>
-                      <select
-                        value={formData.status}
-                        onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Prefinancing['status'] }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      >
-                        <option value="pending">En attente</option>
-                        <option value="paid">Décaissé</option>
-                        <option value="repaid">Remboursé</option>
-                      </select>
-                      <p className="text-xs text-gray-500 mt-1">
-                        Vous pouvez modifier le statut en tant que Comptable
-                      </p>
-                    </div>
+                    <>
+                      { formData.status === 'approved' || formData.status === 'paid' || formData.status === 'repaid'? (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Statut (Comptable)
+                          </label>
+                          <select
+                            value={formData.status}
+                            onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Prefinancing['status'] }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          >
+                            {/* <option value="pending">En attente</option> */}
+                            <option value="paid">Décaissé</option>
+                            <option value="repaid">Remboursé</option>
+                          </select>
+                          <p className="text-xs text-gray-500 mt-1">
+                            Vous pouvez modifier le statut en tant que Comptable
+                          </p>
+                        </div>
+                      ):''}
+                    </>
                   ) : (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">

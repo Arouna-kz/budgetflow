@@ -57,8 +57,8 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         grantId: '',
         code: '',
         name: '',
-        plannedAmount: '',
-        notifiedAmount: '',
+        plannedAmount: '0', // ← Initialiser à '0' ici aussi
+        notifiedAmount: '0',
         description: '',
         color: 'bg-blue-100 text-blue-700'
     });
@@ -687,13 +687,17 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
 
     // Réinitialisation des formulaires
     const resetBudgetLineForm = () => {
-        setBudgetLineFormData({
-            grantId: selectedGrant?.id || '',
-            code: '', name: '', plannedAmount: '0', notifiedAmount: '', description: '',
-            color: 'bg-blue-100 text-blue-700'
-        });
-        setShowBudgetLineForm(false);
-        setEditingBudgetLine(null);
+      setBudgetLineFormData({
+          grantId: selectedGrant?.id || '',
+          code: '', 
+          name: '', 
+          plannedAmount: '0', // ← Toujours initialiser à '0' au lieu de chaîne vide
+          notifiedAmount: '0', // ← Idem pour notifiedAmount
+          description: '',
+          color: 'bg-blue-100 text-blue-700'
+      });
+      setShowBudgetLineForm(false);
+      setEditingBudgetLine(null);
     };
 
     const resetSubBudgetLineForm = () => {
@@ -706,54 +710,94 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         setEditingSubBudgetLine(null);
     };
 
+    // S'assurer que le formulaire est correctement initialisé quand il s'ouvre
+    useEffect(() => {
+        if (showBudgetLineForm && !editingBudgetLine) {
+            // Réinitialiser le formulaire quand on ouvre pour une nouvelle ligne
+            setBudgetLineFormData({
+                grantId: selectedGrant?.id || '',
+                code: '',
+                name: '',
+                plannedAmount: '0',
+                notifiedAmount: '0',
+                description: '',
+                color: 'bg-blue-100 text-blue-700'
+            });
+        }
+    }, [showBudgetLineForm, editingBudgetLine, selectedGrant]);
+
     // Soumission des formulaires avec vérification des permissions
     const handleBudgetLineSubmit = (e: React.FormEvent) => {
-      e.preventDefault();
-      
-      if (!canCreate && !editingBudgetLine) {
-        showError('Permission refusée', 'Vous n\'avez pas la permission de créer des lignes budgétaires');
-        return;
-      }
+        e.preventDefault();
+        
+        if (!canCreate && !editingBudgetLine) {
+            showError('Permission refusée', 'Vous n\'avez pas la permission de créer des lignes budgétaires');
+            return;
+        }
 
-      if (!canEdit && editingBudgetLine) {
-        showError('Permission refusée', 'Vous n\'avez pas la permission de modifier des lignes budgétaires');
-        return;
-      }
-      
-      if (!budgetLineFormData.grantId || !budgetLineFormData.code || !budgetLineFormData.name || !budgetLineFormData.plannedAmount) {
-        showValidationError('Champs obligatoires manquants', 'Veuillez remplir la subvention, le code, le nom et le montant planifié');
-        return;
-      }
+        if (!canEdit && editingBudgetLine) {
+            showError('Permission refusée', 'Vous n\'avez pas la permission de modifier des lignes budgétaires');
+            return;
+        }
 
-      const plannedAmount = parseFloat(budgetLineFormData.plannedAmount);
-      const notifiedAmount = parseFloat(budgetLineFormData.notifiedAmount) || 0;
+        // VALIDATION AMÉLIORÉE
+        const plannedAmountValue = parseFloat(budgetLineFormData.plannedAmount);
+        const notifiedAmountValue = parseFloat(budgetLineFormData.notifiedAmount) || 0;
 
-      if (editingBudgetLine) {
-        onUpdateBudgetLine(editingBudgetLine.id, {
-          grantId: budgetLineFormData.grantId,
-          code: budgetLineFormData.code,
-          name: budgetLineFormData.name,
-          plannedAmount,
-          notifiedAmount,
-          description: budgetLineFormData.description,
-          color: budgetLineFormData.color
+        // Vérification plus détaillée
+        const missingFields = [];
+        if (!budgetLineFormData.grantId) missingFields.push('subvention');
+        if (!budgetLineFormData.code.trim()) missingFields.push('code');
+        if (!budgetLineFormData.name.trim()) missingFields.push('nom');
+        if (isNaN(plannedAmountValue) || plannedAmountValue < 0) missingFields.push('montant planifié');
+
+        if (missingFields.length > 0) {
+            showValidationError(
+                'Champs obligatoires manquants ou invalides', 
+                `Veuillez remplir les champs suivants : ${missingFields.join(', ')}`
+            );
+            return;
+        }
+
+        // Validation supplémentaire pour le montant
+        if (plannedAmountValue < 0) {
+            showValidationError('Montant invalide', 'Le montant planifié ne peut pas être négatif');
+            return;
+        }
+
+        console.log('Submitting Budget Line Form Data:', {
+            grantId: budgetLineFormData.grantId,
+            code: budgetLineFormData.code,
+            name: budgetLineFormData.name,
+            plannedAmount: plannedAmountValue
         });
-        markBudgetLineAsModified(editingBudgetLine.id);
-        showSuccess('Ligne modifiée', 'La ligne budgétaire a été modifiée avec succès');
-      } else {
-        onAddBudgetLine({
-          grantId: budgetLineFormData.grantId,
-          code: budgetLineFormData.code,
-          name: budgetLineFormData.name,
-          plannedAmount,
-          notifiedAmount,
-          description: budgetLineFormData.description,
-          color: budgetLineFormData.color
-        });
-        showSuccess('Ligne ajoutée', 'La ligne budgétaire a été ajoutée avec succès');
-      }
 
-      resetBudgetLineForm();
+        if (editingBudgetLine) {
+            onUpdateBudgetLine(editingBudgetLine.id, {
+                grantId: budgetLineFormData.grantId,
+                code: budgetLineFormData.code,
+                name: budgetLineFormData.name,
+                plannedAmount: plannedAmountValue,
+                notifiedAmount: notifiedAmountValue,
+                description: budgetLineFormData.description,
+                color: budgetLineFormData.color
+            });
+            markBudgetLineAsModified(editingBudgetLine.id);
+            showSuccess('Ligne modifiée', 'La ligne budgétaire a été modifiée avec succès');
+        } else {
+            onAddBudgetLine({
+                grantId: budgetLineFormData.grantId,
+                code: budgetLineFormData.code,
+                name: budgetLineFormData.name,
+                plannedAmount: plannedAmountValue,
+                notifiedAmount: notifiedAmountValue,
+                description: budgetLineFormData.description,
+                color: budgetLineFormData.color
+            });
+            showSuccess('Ligne ajoutée', 'La ligne budgétaire a été ajoutée avec succès');
+        }
+
+        resetBudgetLineForm();
     };
 
     const handleSubBudgetLineSubmit = (e: React.FormEvent) => {
@@ -851,13 +895,23 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         return;
       }
 
-      const confirmed = await confirmDelete(
-        'Supprimer la ligne budgétaire',
-        `Êtes-vous sûr de vouloir supprimer la ligne "${line.name}" ? Cette action est irréversible.`
-      );
-      if (confirmed) {
-        onDeleteBudgetLine(line.id);
-        showSuccess('Ligne supprimée', 'La ligne budgétaire a été supprimée avec succès');
+      try {
+        const result = await confirmDelete(
+          'Supprimer la ligne budgétaire',
+          `Êtes-vous sûr de vouloir supprimer la ligne "${line.name}" ? Cette action est irréversible.`
+        );
+        
+        // CORRECTION : Vérifier result.isConfirmed au lieu de result
+        if (result.isConfirmed) {
+          onDeleteBudgetLine(line.id);
+          showSuccess('Ligne supprimée', 'La ligne budgétaire a été supprimée avec succès');
+        } else {
+          // L'utilisateur a annulé, ne rien faire
+          console.log('Suppression annulée par l\'utilisateur');
+        }
+      } catch (error) {
+        console.error('Erreur lors de la confirmation de suppression:', error);
+        showError('Erreur', 'Une erreur est survenue lors de la confirmation de suppression');
       }
     };
 
@@ -867,15 +921,27 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         return;
       }
 
-      const confirmed = await confirmDelete(
-        'Supprimer la sous-ligne budgétaire',
-        `Êtes-vous sûr de vouloir supprimer la sous-ligne "${line.name}" ? Cette action est irréversible.`
-      );
-      if (confirmed) {
-        onDeleteSubBudgetLine(line.id);
-        showSuccess('Sous-ligne supprimée', 'La sous-ligne budgétaire a été supprimée avec succès');
+      try {
+        const result = await confirmDelete(
+          'Supprimer la sous-ligne budgétaire',
+          `Êtes-vous sûr de vouloir supprimer la sous-ligne "${line.name}" ? Cette action est irréversible.`
+        );
+        
+        // CORRECTION : Vérifier result.isConfirmed au lieu de result
+        if (result.isConfirmed) {
+          onDeleteSubBudgetLine(line.id);
+          showSuccess('Sous-ligne supprimée', 'La sous-ligne budgétaire a été supprimée avec succès');
+        } else {
+          // L'utilisateur a annulé, ne rien faire
+          console.log('Suppression annulée par l\'utilisateur');
+        }
+      } catch (error) {
+        console.error('Erreur lors de la confirmation de suppression:', error);
+        showError('Erreur', 'Une erreur est survenue lors de la confirmation de suppression');
       }
     };
+
+    
     // Expansion des lignes
     const toggleBudgetLineExpansion = (budgetLineId: string) => {
         const newExpanded = new Set(expandedBudgetLines);

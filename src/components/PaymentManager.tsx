@@ -1479,18 +1479,28 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                                   <option value="approved">Approuvé</option>
                                   <option value="rejected">Rejeté</option>
                                 </select>
+
+                                <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PAYMENT_STATUS[payment.status].color}`}>
+                                  {PAYMENT_STATUS[payment.status].label}
+                                </span>
                               </>
                             ): canModifyStatusComptable() ? (
                               <>
-                                <select
-                                  value={payment.status}
-                                  onChange={(e) => updatePaymentStatus(payment.id, e.target.value as Payment['status'])}
-                                  className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PAYMENT_STATUS[payment.status].color}`}
-                                >
-                                  <option value="pending">En attente</option>
-                                  <option value="paid">Payé</option>
-                                  {/* <option value="cashed">Encaissé</option> */}
-                                </select>
+                                {payment.status === 'approved' || payment.status === 'paid' ? (
+                                  <select
+                                    value={payment.status}
+                                    onChange={(e) => updatePaymentStatus(payment.id, e.target.value as Payment['status'])}
+                                    className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PAYMENT_STATUS[payment.status].color}`}
+                                  >
+                                    <option value="pending">En attente</option>
+                                    <option value="paid">Payé</option>
+                                    {/* <option value="cashed">Encaissé</option> */}
+                                  </select>
+                                ):''}
+
+                                <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PAYMENT_STATUS[payment.status].color}`}>
+                                {PAYMENT_STATUS[payment.status].label}
+                              </span>
                               </>
                             ):(
                               <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PAYMENT_STATUS[payment.status].color}`}>

@@ -1166,6 +1166,7 @@ function App() {
       module: 'payments',
       notificationCount: paymentNotificationCount > 0 ? paymentNotificationCount : undefined
     },
+    { id: 'treasury', label: 'Trésorerie', icon: Banknote, module: 'treasury' },
     { 
       id: 'prefinancing', 
       label: 'Préfinancements', 
@@ -1180,7 +1181,6 @@ function App() {
       module: 'employee_loans',
       notificationCount: employeeLoanNotificationCount > 0 ? employeeLoanNotificationCount : undefined
     },
-    { id: 'treasury', label: 'Trésorerie', icon: Banknote, module: 'treasury' },
     { id: 'reports', label: 'Rapports', icon: FileText, module: 'reports' },
     { id: 'users', label: 'Utilisateurs', icon: Users, module: 'users' },
     { id: 'globalConfig', label: 'Configuration', icon: Settings, module: 'globalConfig' },
@@ -1210,7 +1210,12 @@ function App() {
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center space-x-4">
               <div className="flex items-center space-x-3">
-                <div className="p-2 bg-white/10 backdrop-blur-sm rounded-xl border border-white/20">
+                <div className="p-2 bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl">
+                  <Target className="w-6 h-6 text-white" />
+                </div>
+                {/* <div className="p-2 bg-white/10 backdrop-blur-sm rounded-xl border border-white/20"> */}
+                <div className="backdrop-blur-sm rounded-xl border border-white/20">
+                
                   <div className="relative w-20 h-8">
                     <img
                       src="/budgetbase/logo.png"
@@ -1227,11 +1232,25 @@ function App() {
 
               {/* Global Grant Selector */}
               {selectedGrant && (
-                <div className="hidden md:flex items-center space-x-3 bg-white/10 backdrop-blur-sm px-4 py-2 rounded-xl border border-white/20">
-                  <Settings className="w-4 h-4 text-indigo-200" />
-                  <div>
-                    <p className="text-xs text-indigo-200 font-medium">Subvention Active</p>
-                    <p className="text-sm font-semibold text-white">{selectedGrant.name}</p>
+                <div 
+                  className="hidden md:flex items-center space-x-2 bg-white/10 backdrop-blur-sm px-3 py-1 rounded-xl border border-white/20 group relative"
+                  title={`Subvention active: ${selectedGrant.name}`}
+                >
+                  <Banknote className="w-4 h-4 text-indigo-200 flex-shrink-0" />
+                  <div className="max-w-[180px]">
+                    <p className="text-xs text-indigo-200 font-medium truncate">Subvention Active</p>
+                    <p className="text-xs font-semibold text-white truncate">
+                      {selectedGrant.name.length > 25 
+                        ? `${selectedGrant.name.substring(0, 25)}...` 
+                        : selectedGrant.name
+                      }
+                    </p>
+                  </div>
+                  {/* Tooltip professionnel */}
+                  <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 hidden group-hover:block bg-gray-900 text-white text-sm rounded-lg py-2 px-3 whitespace-normal max-w-xs text-center shadow-lg z-50 border border-gray-700">
+                    {selectedGrant.name}
+                    {/* Flèche du tooltip */}
+                    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-b-gray-900"></div>
                   </div>
                 </div>
               )}

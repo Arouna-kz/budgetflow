@@ -39,6 +39,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   // ÉTATS DU COMPOSANT
   const [showForm, setShowForm] = useState(false);
   const [showRepaymentForm, setShowRepaymentForm] = useState(false);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedLoan, setSelectedLoan] = useState<EmployeeLoan | null>(null);
   const [editingLoan, setEditingLoan] = useState<EmployeeLoan | null>(null);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
@@ -93,30 +94,6 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
 
   // 🎯 FONCTIONS UTILITAIRES POUR LES RÔLES ET PERMISSIONS
 
-  // EFFET POUR PRÉ-REMPLIR LES NOMS DES SIGNATAIRES
-  // useEffect(() => {
-  //   if (userProfile && canViewSignatureSection()) {
-  //     const userName = getUserFullName();
-      
-  //     setApprovals(prev => {
-  //       const newApprovals = { ...prev };
-  //       const userProfession = getUserProfession();
-        
-  //       if (userProfession === 'Coordinateur de la Subvention' && !prev.supervisor1.name) {
-  //         newApprovals.supervisor1.name = userName;
-  //       } else if (userProfession === 'Comptable' && !prev.supervisor2.name) {
-  //         newApprovals.supervisor2.name = userName;
-  //       } else if (userProfession === 'Coordonnateur National' && !prev.finalApproval.name) {
-  //         newApprovals.finalApproval.name = userName;
-  //       }
-        
-  //       return newApprovals;
-  //     });
-  //   }
-  // }, [userProfile, showForm]);
-
-  // console.log('userProfession:', userProfession);
-
   // Récupère le nom complet de l'utilisateur
   const getUserFullName = (): string => {
     if (!userProfile) return '';
@@ -125,6 +102,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     }
     return userProfile.email;
   };
+
   // Récupère la profession de l'utilisateur 
   const getUserProfession = (): string => { 
     return userProfile?.profession || '';
@@ -144,7 +122,6 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     const signatureProfessions = ['Coordinateur de la Subvention', 'Comptable', 'Coordonnateur National'];
     return signatureProfessions.includes(getUserProfession());
   }; 
-
 
   // Vérifie si l'utilisateur peut signer un prêt spécifique
   const canSignLoan = (loan: EmployeeLoan | null, signatureType: string): boolean => {
@@ -190,10 +167,8 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
       if (userProfession === 'Coordinateur de la Subvention') {
         return !loan.approvals?.supervisor1?.signature;
       } else if (userProfession === 'Comptable') {
-
         return !loan.approvals?.supervisor2?.signature;
       } else if (userProfession === 'Coordonnateur National') {
-
         const hasSupervisor1Signed = loan.approvals?.supervisor1?.signature;
         const hasSupervisor2Signed = loan.approvals?.supervisor2?.signature;
         const hasFinalSigned = loan.approvals?.finalApproval?.signature;
@@ -201,6 +176,18 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
       }
       return false;
     });
+  };
+
+  // Fonction pour ouvrir le modal de détails
+  const handleViewDetails = (loan: EmployeeLoan) => {
+    setSelectedLoan(loan);
+    setShowDetailsModal(true);
+  };
+
+  // Fonction pour fermer le modal de détails
+  const handleCloseDetails = () => {
+    setShowDetailsModal(false);
+    setSelectedLoan(null);
   };
 
   // Fonction pour basculer l'expansion d'une ligne
@@ -228,7 +215,6 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const canDelete = hasPermission('employee_loans', 'delete');
   const canView = hasPermission('employee_loans', 'view');
   const canApprove = hasPermission('employee_loans', 'approve');
-  const canAddRepayment = hasPermission('employee_loans', 'add_repayment');
 
   // Vérifier si la subvention sélectionnée est active
   const activeGrant = grants.find(grant => grant.status === 'active');
@@ -925,7 +911,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const handleRepaymentSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!canAddRepayment) {
+    if (!userProfession === 'Comptable') {
       showWarning('Permission refusée', 'Vous n\'avez pas la permission d\'ajouter des remboursements');
       return;
     }
@@ -1664,7 +1650,8 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Montant remboursé *
+                  Montant remboursé ( {getGrant(selectedLoan.grantId)?.currency === 'EUR' ? '€' : 
+                     getGrant(selectedLoan.grantId)?.currency === 'USD' ? '$' : 'CFA'})*
                 </label>
                 <div className="relative">
                   <input
@@ -1678,10 +1665,6 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                     placeholder="0.00"
                     required
                   />
-                  <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">
-                    {getGrant(selectedLoan.grantId)?.currency === 'EUR' ? '€' : 
-                     getGrant(selectedLoan.grantId)?.currency === 'USD' ? '$' : 'CFA'}
-                  </div>
                 </div>
                 <p className="text-xs text-gray-500 mt-1">
                   Restant à rembourser: {formatCurrency(getRemainingAmount(selectedLoan), selectedLoan.grantId)}
@@ -1718,6 +1701,299 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Details Modal */}
+      {showDetailsModal && selectedLoan && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-blue-100 rounded-lg">
+                  <Eye className="w-6 h-6 text-blue-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Détails du Prêt - {selectedLoan.loanNumber}
+                  </h3>
+                  <p className="text-sm text-gray-600">
+                    {selectedLoan.employee.name} - {selectedLoan.employee.employeeId}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => exportLoanForm(selectedLoan)}
+                  className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                  title="Exporter la fiche"
+                >
+                  <Download className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={handleCloseDetails}
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Informations Générales */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-4">Informations Générales</h4>
+                  <div className="space-y-3">
+                    <div>
+                      <span className="font-medium text-gray-700">N° de Prêt:</span>
+                      <p className="text-gray-900">{selectedLoan.loanNumber}</p>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Statut:</span>
+                      <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${LOAN_STATUS[selectedLoan.status].color}`}>
+                        {LOAN_STATUS[selectedLoan.status].label}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Date du prêt:</span>
+                      <p className="text-gray-900">{new Date(selectedLoan.date).toLocaleDateString('fr-FR')}</p>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Date remboursement prévue:</span>
+                      <p className="text-gray-900">{new Date(selectedLoan.expectedRepaymentDate).toLocaleDateString('fr-FR')}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-4">Informations Employé</h4>
+                  <div className="space-y-3">
+                    <div>
+                      <span className="font-medium text-gray-700">Nom:</span>
+                      <p className="text-gray-900">{selectedLoan.employee.name}</p>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Matricule:</span>
+                      <p className="text-gray-900">{selectedLoan.employee.employeeId}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Informations Financières */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="bg-blue-50 rounded-xl p-4">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-4">Détails Financiers</h4>
+                  <div className="space-y-3">
+                    <div>
+                      <span className="font-medium text-gray-700">Montant du prêt:</span>
+                      <p className="text-gray-900 font-semibold">{formatCurrency(selectedLoan.amount, selectedLoan.grantId)}</p>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Total remboursé:</span>
+                      <p className="text-gray-900">{formatCurrency(getTotalRepaid(selectedLoan), selectedLoan.grantId)}</p>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Reste à rembourser:</span>
+                      <p className="text-gray-900 font-semibold">{formatCurrency(getRemainingAmount(selectedLoan), selectedLoan.grantId)}</p>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Progression:</span>
+                      <div className="flex items-center space-x-2">
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className="bg-green-600 h-2 rounded-full transition-all duration-300"
+                            style={{ width: `${Math.min(getRepaymentProgress(selectedLoan), 100)}%` }}
+                          ></div>
+                        </div>
+                        <span className="text-sm font-medium text-gray-600">
+                          {getRepaymentProgress(selectedLoan).toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-green-50 rounded-xl p-4">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-4">Échéancier</h4>
+                  <div className="space-y-3">
+                    <div>
+                      <span className="font-medium text-gray-700">Montant par échéance:</span>
+                      <p className="text-gray-900">{formatCurrency(selectedLoan.repaymentSchedule.installmentAmount, selectedLoan.grantId)}</p>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Nombre d'échéances:</span>
+                      <p className="text-gray-900">{selectedLoan.repaymentSchedule.numberOfInstallments}</p>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-700">Fréquence:</span>
+                      <p className="text-gray-900">{getFrequencyLabel(selectedLoan.repaymentSchedule.frequency)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="bg-yellow-50 rounded-xl p-4">
+                <h4 className="text-lg font-semibold text-gray-900 mb-4">Description</h4>
+                <p className="text-gray-700 whitespace-pre-wrap">{selectedLoan.description}</p>
+              </div>
+
+              {/* Historique des Remboursements */}
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
+                  <h4 className="text-lg font-semibold text-gray-900">Historique des Remboursements</h4>
+                  <p className="text-sm text-gray-600">
+                    {selectedLoan.repayments.length} remboursement(s) enregistré(s)
+                  </p>
+                </div>
+                
+                {selectedLoan.repayments.length === 0 ? (
+                  <div className="text-center py-8">
+                    <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
+                      <Clock className="w-8 h-8 text-gray-400" />
+                    </div>
+                    <p className="text-gray-500">Aucun remboursement enregistré pour ce prêt</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Date
+                          </th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Montant
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Référence
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {selectedLoan.repayments.map((repayment, index) => (
+                          <tr key={index} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 text-sm text-gray-900">
+                              {new Date(repayment.date).toLocaleDateString('fr-FR')}
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-900 text-right font-medium">
+                              {formatCurrency(repayment.amount, selectedLoan.grantId)}
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-900">
+                              {repayment.reference}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot className="bg-gray-50">
+                        <tr>
+                          <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                            Total remboursé
+                          </td>
+                          <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right">
+                            {formatCurrency(getTotalRepaid(selectedLoan), selectedLoan.grantId)}
+                          </td>
+                          <td className="px-4 py-3"></td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Signatures */}
+              <div className="bg-purple-50 rounded-xl p-4">
+                <h4 className="text-lg font-semibold text-gray-900 mb-4">Signatures d'Approbation</h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="text-center">
+                    <h5 className="font-medium text-gray-700 mb-2">Coordinateur de la Subvention</h5>
+                    <div className="bg-white rounded-lg p-3 border border-gray-200">
+                      <p className="text-sm font-medium text-gray-900">
+                        {selectedLoan.approvals?.supervisor1?.name || 'En attente'}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {selectedLoan.approvals?.supervisor1?.date ? 
+                          new Date(selectedLoan.approvals.supervisor1.date).toLocaleDateString('fr-FR') : ''
+                        }
+                      </p>
+                      <div className="mt-2">
+                        {selectedLoan.approvals?.supervisor1?.signature ? (
+                          <CheckCircle className="w-5 h-5 text-green-600 mx-auto" />
+                        ) : (
+                          <Clock className="w-5 h-5 text-gray-400 mx-auto" />
+                        )}
+                      </div>
+                      {selectedLoan.approvals?.supervisor1?.observation && (
+                        <div className="mt-2 p-2 bg-yellow-50 rounded border border-yellow-200">
+                          <p className="text-xs text-yellow-800">
+                            {selectedLoan.approvals.supervisor1.observation}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="text-center">
+                    <h5 className="font-medium text-gray-700 mb-2">Comptable</h5>
+                    <div className="bg-white rounded-lg p-3 border border-gray-200">
+                      <p className="text-sm font-medium text-gray-900">
+                        {selectedLoan.approvals?.supervisor2?.name || 'En attente'}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {selectedLoan.approvals?.supervisor2?.date ? 
+                          new Date(selectedLoan.approvals.supervisor2.date).toLocaleDateString('fr-FR') : ''
+                        }
+                      </p>
+                      <div className="mt-2">
+                        {selectedLoan.approvals?.supervisor2?.signature ? (
+                          <CheckCircle className="w-5 h-5 text-green-600 mx-auto" />
+                        ) : (
+                          <Clock className="w-5 h-5 text-gray-400 mx-auto" />
+                        )}
+                      </div>
+                      {selectedLoan.approvals?.supervisor2?.observation && (
+                        <div className="mt-2 p-2 bg-yellow-50 rounded border border-yellow-200">
+                          <p className="text-xs text-yellow-800">
+                            {selectedLoan.approvals.supervisor2.observation}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="text-center">
+                    <h5 className="font-medium text-gray-700 mb-2">Coordonnateur National</h5>
+                    <div className="bg-white rounded-lg p-3 border border-gray-200">
+                      <p className="text-sm font-medium text-gray-900">
+                        {selectedLoan.approvals?.finalApproval?.name || 'En attente'}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {selectedLoan.approvals?.finalApproval?.date ? 
+                          new Date(selectedLoan.approvals.finalApproval.date).toLocaleDateString('fr-FR') : ''
+                        }
+                      </p>
+                      <div className="mt-2">
+                        {selectedLoan.approvals?.finalApproval?.signature ? (
+                          <CheckCircle className="w-5 h-5 text-green-600 mx-auto" />
+                        ) : (
+                          <Clock className="w-5 h-5 text-gray-400 mx-auto" />
+                        )}
+                      </div>
+                      {selectedLoan.approvals?.finalApproval?.observation && (
+                        <div className="mt-2 p-2 bg-yellow-50 rounded border border-yellow-200">
+                          <p className="text-xs text-yellow-800">
+                            {selectedLoan.approvals.finalApproval.observation}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1963,24 +2239,36 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                           </td>
                           <td className="px-4 py-4 text-center">
                             {canModifyStatus() ? (
-                              <select
-                                value={loan.status}
-                                onChange={(e) => updateLoanStatus(loan.id, e.target.value as EmployeeLoan['status'])}
-                                className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${LOAN_STATUS[loan.status].color}`}
-                              >
-                                <option value="pending">En attente</option>
-                                <option value="approved">Approuvé</option>
-                                <option value="rejected">Rejeté</option>
-                              </select>
-                              ): canModifyStatusComptable() ? (
+                              <>
                                 <select
-                                      value={loan.status}
-                                      onChange={(e) => updateLoanStatus(loan.id, e.target.value as EmployeeLoan['status'])}
-                                      className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${LOAN_STATUS[loan.status].color}`}
-                                    >
-                                      <option value="active">En cours</option>
-                                      <option value="completed">Remboursé</option>
-                                    </select>
+                                  value={loan.status}
+                                  onChange={(e) => updateLoanStatus(loan.id, e.target.value as EmployeeLoan['status'])}
+                                  className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${LOAN_STATUS[loan.status].color}`}
+                                >
+                                  <option value="pending">En attente</option>
+                                  <option value="approved">Approuvé</option>
+                                  <option value="rejected">Rejeté</option>
+                                </select>
+                                <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${LOAN_STATUS[loan.status].color}`}>
+                                  {LOAN_STATUS[loan.status].label}
+                                </span>
+                              </>
+                              ): canModifyStatusComptable() ? (
+                              <>
+                                {loan.status === 'approved' || loan.status === 'active' || loan.status === 'completed'? ( 
+                                  <select
+                                    value={loan.status}
+                                    onChange={(e) => updateLoanStatus(loan.id, e.target.value as EmployeeLoan['status'])}
+                                    className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${LOAN_STATUS[loan.status].color}`}
+                                  >
+                                    <option value="active">En cours</option>
+                                    <option value="completed">Remboursé</option>
+                                  </select>
+                                ) : ''}
+                                <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${LOAN_STATUS[loan.status].color}`}>
+                                  {LOAN_STATUS[loan.status].label}
+                                </span>
+                              </>
                             ):(
                               <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${LOAN_STATUS[loan.status].color}`}>
                                 {LOAN_STATUS[loan.status].label}
@@ -1989,7 +2277,16 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                           </td>
                           <td className="px-4 py-4 text-center">
                             <div className="flex items-center justify-center space-x-1">
-                              {loan.status === 'active' && remainingAmount > 0 && canAddRepayment && (
+                              {/* Bouton Voir Détails */}
+                              <button
+                                onClick={() => handleViewDetails(loan)}
+                                className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Voir les détails"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+
+                              {loan.status === 'active' && remainingAmount > 0 && userProfession === 'Comptable' && canEdit && (
                                 <button
                                   onClick={() => {
                                     setSelectedLoan(loan);

@@ -258,7 +258,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       {/* Stats Cards avec design moderne */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 px-4 md:px-0">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4 md:gap-6 px-4 md:px-0">
         {/* Carte Budget Total */}
         <div className="bg-gradient-to-br from-white to-blue-50 rounded-2xl shadow-lg border border-blue-100 p-4 md:p-6 transform hover:scale-105 transition-all duration-300">
           <div className="flex items-center justify-between">
