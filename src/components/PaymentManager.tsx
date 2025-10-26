@@ -1492,6 +1492,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                                     onChange={(e) => updatePaymentStatus(payment.id, e.target.value as Payment['status'])}
                                     className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PAYMENT_STATUS[payment.status].color}`}
                                   >
+                                    <option value="">Selectionnez</option>
                                     <option value="pending">En attente</option>
                                     <option value="paid">Payé</option>
                                     {/* <option value="cashed">Encaissé</option> */}

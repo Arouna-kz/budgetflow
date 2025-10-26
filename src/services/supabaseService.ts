@@ -598,6 +598,19 @@ export const paymentsService = {
     } catch (error) {
       handleSupabaseError(error);
     }
+  },
+
+  async delete(id: string): Promise<void> {
+    try {
+      const { error } = await supabase
+        .from('payments')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+    } catch (error) {
+      handleSupabaseError(error);
+    }
   }
 };
 
@@ -674,8 +687,6 @@ export const usersService = {
 
   async update(id: string, updates: Partial<User>): Promise<User> {
   try {
-    console.log('Updating user with ID:', id);
-    console.log('Updates:', updates);
 
     const { data, error } = await supabase
       .from('users')
@@ -1122,7 +1133,21 @@ export const bankTransactionsService = {
       handleSupabaseError(error);
       throw error;
     }
+  },
+
+  async delete(id: string): Promise<void> {
+    try {
+      const { error } = await supabase
+        .from('bank_transactions')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+    } catch (error) {
+      handleSupabaseError(error);
+    }
   }
+  
 };
 
 // Prefinancings Service
@@ -1238,6 +1263,19 @@ export const prefinancingsService = {
     } catch (error) {
       handleSupabaseError(error);
     }
+  },
+
+  async delete(id: string): Promise<void> {
+    try {
+      const { error } = await supabase
+        .from('prefinancings')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+    } catch (error) {
+      handleSupabaseError(error);
+    }
   }
 };
 
@@ -1346,7 +1384,21 @@ export const employeeLoansService = {
     } catch (error) {
       handleSupabaseError(error);
     }
+  },
+
+  async delete(id: string): Promise<void> {
+    try {
+      const { error } = await supabase
+        .from('employee_loans')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+    } catch (error) {
+      handleSupabaseError(error);
+    }
   }
+
 };
 
 // App Settings Service

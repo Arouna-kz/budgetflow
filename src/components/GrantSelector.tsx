@@ -48,7 +48,6 @@ const GrantSelectorComponent: React.FC<GrantSelectorProps> = ({
   // Gestionnaire de sélection de subvention - SIMPLIFIÉ
   const handleGrantSelect = (grantId: string) => {
   if (canEdit) {
-    console.log('🎯 Grant selected in component:', grantId);
     onSelectGrant(grantId); // Cette fonction doit être handleSelectGrant de App.tsx
     setIsDropdownOpen(false);
     setSearchTerm('');

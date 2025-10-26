@@ -83,8 +83,8 @@ export const showInfo = (title: string, text?: string) => {
 };
 
 // Confirmation de suppression
-export const confirmDelete = (title: string, text?: string) => {
-  return Swal.fire({
+export const confirmDelete = async (title: string, text?: string): Promise<boolean> => {
+  const result = await Swal.fire({
     ...defaultConfig,
     icon: 'warning',
     title,
@@ -99,6 +99,9 @@ export const confirmDelete = (title: string, text?: string) => {
       cancelButton: 'bg-gray-100 text-gray-700 px-6 py-3 rounded-xl font-medium hover:bg-gray-200 transition-colors'
     }
   });
+  
+  //Retourner un booléen explicite
+  return result.isConfirmed;
 };
 
 // Confirmation générale

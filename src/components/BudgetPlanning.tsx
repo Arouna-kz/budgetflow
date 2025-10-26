@@ -902,7 +902,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         );
         
         // CORRECTION : Vérifier result.isConfirmed au lieu de result
-        if (result.isConfirmed) {
+        if (result) {
           onDeleteBudgetLine(line.id);
           showSuccess('Ligne supprimée', 'La ligne budgétaire a été supprimée avec succès');
         } else {
@@ -927,8 +927,8 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
           `Êtes-vous sûr de vouloir supprimer la sous-ligne "${line.name}" ? Cette action est irréversible.`
         );
         
-        // CORRECTION : Vérifier result.isConfirmed au lieu de result
-        if (result.isConfirmed) {
+        // Vérifier result.isConfirmed au lieu de result
+        if (result) {
           onDeleteSubBudgetLine(line.id);
           showSuccess('Sous-ligne supprimée', 'La sous-ligne budgétaire a été supprimée avec succès');
         } else {

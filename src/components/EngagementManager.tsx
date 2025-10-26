@@ -1603,14 +1603,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
             </div>
             <h3 className="text-lg font-medium text-gray-900 mb-2">Aucun engagement</h3>
             <p className="text-gray-500 mb-4">Commencez par ajouter votre premier engagement</p>
-            {canCreate && (
-              <button
-                onClick={() => setShowForm(true)}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors"
-              >
-                Nouvel engagement
-              </button>
-            )}
+           
           </div>
         ) : (
           <>

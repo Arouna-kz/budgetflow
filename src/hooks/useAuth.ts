@@ -16,7 +16,6 @@ export const useAuth = () => {
 
     const initializeAuth = async () => {
       try {
-        console.log('Initializing auth...');
         // Get initial session
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         
@@ -28,7 +27,6 @@ export const useAuth = () => {
           return;
         }
         
-        console.log('Session found:', session ? 'yes' : 'no');
         if (session?.user && mounted) {
           setUser(session.user);
           await loadUserProfile(session.user.id);
@@ -49,7 +47,6 @@ export const useAuth = () => {
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event: AuthChangeEvent, session: Session | null) => {
-        console.log('Auth state changed:', event);
         if (!mounted) return;
 
         try {
@@ -82,8 +79,6 @@ const loadUserProfile = async (userId: string) => {
   let mounted = true;
   
   try {
-    console.log('Loading user profile for:', userId);
-    
     // Load user profile from Supabase avec un timeout plus court
     const profilePromise = supabase
       .from('users')
@@ -229,7 +224,6 @@ const loadUserProfile = async (userId: string) => {
   try {
     setError(null);
     setLoading(true);
-    console.log('Starting signup process for:', email);
 
     // 1. Créer le compte Auth
     const { data, error: authError } = await supabase.auth.signUp({
@@ -253,8 +247,6 @@ const loadUserProfile = async (userId: string) => {
       throw new Error('No user object returned from authentication');
     }
 
-    console.log('Auth user created, ID:', data.user.id);
-
     // 2. Trouver le rôle ADMIN
     const { data: adminRole, error: roleError } = await supabase
       .from('user_roles')
@@ -266,7 +258,6 @@ const loadUserProfile = async (userId: string) => {
       console.error('Error finding admin role:', roleError);
       throw new Error('Le rôle administrateur (ADMIN) est introuvable dans la base de données. Veuillez contacter le support.');
     }
-    console.log('Admin role found, ID:', adminRole.id);
 
     // 3. Créer le profil dans public.users
     const newUserProfile = {
@@ -281,8 +272,6 @@ const loadUserProfile = async (userId: string) => {
       created_by: data.user.id
       // created_at and updated_at should be automatically set by DEFAULT NOW() in your table
     };
-
-    console.log('Attempting to insert user profile:', newUserProfile);
 
     const { data: newUserData, error: userError } = await supabase
       .from('users')
@@ -303,8 +292,6 @@ const loadUserProfile = async (userId: string) => {
       // Lance une erreur avec le code pour faciliter le debug (ex: '23505' pour violation de contrainte unique)
       throw new Error(`CREATE_PROFILE_FAILED_${userError.code}: Échec de la création du profil.`);
     }
-
-    console.log('User profile created successfully:', newUserData);
 
     // 4. Mettre à jour l'état local
     const newUser: User = {

@@ -34,7 +34,7 @@ import GrantManager from './components/GrantManager';
 import GrantSelector from './components/GrantSelector';
 import LoginForm from './components/LoginForm';
 import { usePermissions } from './hooks/usePermissions';
-import { showSuccess, showError, showToast, showLoading, closeLoading } from './utils/alerts';
+import { showSuccess, showError, showToast, showLoading, closeLoading, confirmDelete } from './utils/alerts';
 import { 
   Grant, 
   BudgetLine, 
@@ -115,7 +115,6 @@ function App() {
 
   // 🎯 FONCTION AMÉLIORÉE POUR SÉLECTIONNER ET SAUVEGARDER LA SUBVENTION
   const handleSelectGrant = async (grantId: string) => {
-    console.log('🎯 User selected grant:', grantId);
     setSelectedGrantId(grantId);
     
     // Sauvegarder immédiatement la sélection utilisateur
@@ -123,7 +122,6 @@ function App() {
       isSaving.current = true;
       await appSettingsService.set('selectedGrantId', grantId);
       localStorage.setItem('selectedGrantId', grantId);
-      console.log('💫 User grant selection saved:', grantId);
     } catch (error) {
       console.error('❌ Error saving user grant selection:', error);
       localStorage.setItem('selectedGrantId', grantId);
@@ -136,8 +134,6 @@ function App() {
     try {
       setDataLoading(true);
       showLoading('Chargement des données...');
-
-      console.log('🔄 loadAllData - Début du chargement');
 
       // Charger les données en parallèle
       const [
@@ -178,8 +174,6 @@ function App() {
       setUsers(usersData);
       setRoles(rolesData);
 
-      console.log('📊 Données chargées - Subventions:', grantsData.length);
-
       // 🎯 CHARGEMENT INTELLIGENT DE LA SUBVENTION APRÈS LE CHARGEMENT DES DONNÉES
       if (isInitialLoad.current && grantsData.length > 0) {
         await loadInitialGrantSelection(grantsData);
@@ -198,22 +192,18 @@ function App() {
   // 🎯 FONCTION SÉPARÉE POUR LE CHARGEMENT INITIAL
   const loadInitialGrantSelection = async (grantsData: Grant[]) => {
     try {
-      console.log('🔄 loadInitialGrantSelection - Début');
       
       // 1. Essayer de charger depuis Supabase
       const savedGrantId = await appSettingsService.get('selectedGrantId');
-      console.log('💾 Saved grant from Supabase:', savedGrantId);
       
       // 2. Fallback localStorage
       let grantToSelect = savedGrantId;
       if (!grantToSelect && typeof window !== 'undefined') {
         grantToSelect = localStorage.getItem('selectedGrantId') || '';
-        console.log('💾 Saved grant from localStorage:', grantToSelect);
       }
       
       // 3. Vérifier que la subvention existe toujours
       if (grantToSelect && grantsData.find(g => g.id === grantToSelect)) {
-        console.log('✅ Using existing saved grant:', grantToSelect);
         setSelectedGrantId(grantToSelect);
         return;
       }
@@ -222,11 +212,7 @@ function App() {
       if (grantsData.length > 0) {
         const firstGrant = grantsData[0];
         grantToSelect = firstGrant.id;
-        console.log('🎯 Using first available grant:', grantToSelect);
         setSelectedGrantId(grantToSelect);
-        
-        // 🚨 NE PAS SAUVEGARDER AUTOMATIQUEMENT ICI - seulement si c'est vraiment nécessaire
-        console.log('ℹ️  Initial grant selection - no auto-save to avoid loops');
       }
       
     } catch (error) {
@@ -251,7 +237,6 @@ function App() {
     const saveSelectedGrant = async () => {
       try {
         isSaving.current = true;
-        console.log('💾 Auto-saving selected grant:', selectedGrantId);
         await appSettingsService.set('selectedGrantId', selectedGrantId);
         localStorage.setItem('selectedGrantId', selectedGrantId);
       } catch (error) {
@@ -294,8 +279,6 @@ function App() {
 
   // Debug effect pour suivre l'état de la subvention sélectionnée
   useEffect(() => {
-    console.log('🔍 DEBUG - Current selectedGrantId:', selectedGrantId);
-    console.log('🔍 DEBUG - Available grants:', grants.length);
     if (selectedGrantId) {
       const selectedGrant = grants.find(g => g.id === selectedGrantId);
       console.log('🔍 DEBUG - Selected grant:', selectedGrant?.name);
@@ -406,6 +389,37 @@ function App() {
     showToast('Déconnexion réussie');
   };
 
+  // Fonction pour vérifier les dépendances avant suppression d'une subvention
+  const checkGrantDependencies = (grantId: string) => {
+    const grantEngagements = engagements.filter(eng => eng.grantId === grantId);
+    const grantPayments = payments.filter(p => p.grantId === grantId);
+    const grantPrefinancings = prefinancings.filter(pref => pref.grantId === grantId);
+    const grantEmployeeLoans = employeeLoans.filter(loan => loan.grantId === grantId);
+    
+    const dependencies = [];
+    
+    if (grantEngagements.length > 0) {
+      dependencies.push(`${grantEngagements.length} engagement(s)`);
+    }
+    if (grantPayments.length > 0) {
+      dependencies.push(`${grantPayments.length} paiement(s)`);
+    }
+    if (grantPrefinancings.length > 0) {
+      dependencies.push(`${grantPrefinancings.length} préfinancement(s)`);
+    }
+    if (grantEmployeeLoans.length > 0) {
+      dependencies.push(`${grantEmployeeLoans.length} prêt(s) employé(s)`);
+    }
+    
+    return {
+      hasDependencies: dependencies.length > 0,
+      dependencies: dependencies.join(', '),
+      message: dependencies.length > 0 
+        ? `Cette subvention a des éléments liés : ${dependencies.join(', ')}. La suppression supprimera également ces éléments.`
+        : 'Aucune dépendance trouvée.'
+    };
+  };
+
   // Grant management
   const handleAddGrant = async (grant: Omit<Grant, 'id'>) => {
     try {
@@ -500,33 +514,110 @@ function App() {
 
   const handleDeleteGrant = async (id: string) => {
     try {
-      await grantsService.delete(id);
-      setGrants(prev => prev.filter(grant => grant.id !== id));
+      // Vérifier les dépendances d'abord
+      const dependencyCheck = checkGrantDependencies(id);
       
-      // ✅ Supprimer le compte bancaire associé
+      if (dependencyCheck.hasDependencies) {
+        const confirmed = await confirmDelete(
+          'Suppression avec dépendances',
+          `${dependencyCheck.message}\n\nÊtes-vous sûr de vouloir continuer ? Cette action est irréversible.`
+        );
+        
+        if (!confirmed) {
+          return;
+        }
+      }
+
+      showLoading('Suppression de la subvention en cours...');
+
+      // 1. Supprimer les transactions bancaires
       const accountId = `grant-${id}`;
+      const transactionsToDelete = bankTransactions.filter(transaction => transaction.accountId === accountId);
+      
+      for (const transaction of transactionsToDelete) {
+        await bankTransactionsService.delete(transaction.id);
+      }
+
+      // 2. Supprimer le compte bancaire
       const accountToDelete = bankAccounts.find(acc => acc.id === accountId);
       if (accountToDelete) {
         await bankAccountsService.delete(accountId);
+      }
+
+      // 3. Supprimer les paiements (doit être fait avant les engagements)
+      const paymentsToDelete = payments.filter(p => p.grantId === id);
+      for (const payment of paymentsToDelete) {
+        await paymentsService.delete(payment.id);
+      }
+
+      // 4. Supprimer les engagements liés aux sous-lignes budgétaires
+      const subBudgetLinesToDelete = subBudgetLines.filter(subLine =>
+        budgetLines.some(line => line.grantId === id && line.id === subLine.budgetLineId)
+      );
+      const allEngagementsToDelete = engagements.filter(eng => 
+        subBudgetLinesToDelete.some(subLine => subLine.id === eng.subBudgetLineId)
+      );
+      for (const engagement of allEngagementsToDelete) {
+        await engagementsService.delete(engagement.id);
+      }
+
+      // 5. Supprimer les sous-lignes budgétaires
+      for (const subLine of subBudgetLinesToDelete) {
+        await subBudgetLinesService.delete(subLine.id);
+      }
+
+      // 6. Supprimer les lignes budgétaires
+      const budgetLinesToDelete = budgetLines.filter(line => line.grantId === id);
+      for (const line of budgetLinesToDelete) {
+        await budgetLinesService.delete(line.id);
+      }
+      // 7. Supprimer les préfinancements
+      const prefinancingsToDelete = prefinancings.filter(pref => pref.grantId === id);
+      for (const pref of prefinancingsToDelete) {
+        await prefinancingsService.delete(pref.id);
+      }
+
+      // 8. Supprimer les prêts employés
+      const employeeLoansToDelete = employeeLoans.filter(loan => loan.grantId === id);
+      for (const loan of employeeLoansToDelete) {
+        await employeeLoansService.delete(loan.id);
+      }
+
+      // 9. Supprimer la subvention
+      await grantsService.delete(id);
+      
+      // 10. Mettre à jour l'état local
+      setGrants(prev => prev.filter(grant => grant.id !== id));
+      setBankTransactions(prev => prev.filter(t => !transactionsToDelete.some(del => del.id === t.id)));
+      if (accountToDelete) {
         setBankAccounts(prev => prev.filter(acc => acc.id !== accountId));
       }
+      setEngagements(prev => prev.filter(eng => eng.grantId !== id));
+      setSubBudgetLines(prev => prev.filter(subLine => !subBudgetLinesToDelete.some(del => del.id === subLine.id)));
+      setBudgetLines(prev => prev.filter(line => line.grantId !== id));
+      setPayments(prev => prev.filter(p => p.grantId !== id));
+      setPrefinancings(prev => prev.filter(pref => pref.grantId !== id));
+      setEmployeeLoans(prev => prev.filter(loan => loan.grantId !== id));
       
+      // 11. Mettre à jour la sélection
       if (selectedGrantId === id) {
         const remainingGrants = grants.filter(grant => grant.id !== id);
         if (remainingGrants.length > 0) {
-          // Sélectionner automatiquement la première subvention disponible
           handleSelectGrant(remainingGrants[0].id);
         } else {
           setSelectedGrantId('');
         }
       }
-      showSuccess('Subvention supprimée', 'La subvention a été supprimée avec succès');
+      
+      showSuccess('Subvention supprimée', 'La subvention et tous ses éléments associés ont été supprimés avec succès');
     } catch (error) {
+      console.error('Erreur lors de la suppression:', error);
       showError('Erreur', 'Impossible de supprimer la subvention');
+    } finally {
+      closeLoading();
     }
   };
 
-  // ... (les autres fonctions de gestion restent inchangées)
   // Budget line management
   const handleAddBudgetLine = async (budgetLine: Omit<BudgetLine, 'id' | 'engagedAmount' | 'availableAmount'>) => {
     try {
@@ -555,12 +646,26 @@ function App() {
 
   const handleDeleteBudgetLine = async (id: string) => {
     try {
+
+      // 1. Trouver toutes les sous-lignes qui appartiennent à cette ligne budgétaire
+      const subLinesToDelete = subBudgetLines.filter(line => line.budgetLineId === id);
+
+      // 2. Boucler et supprimer chaque sous-ligne en utilisant la fonction de cascade existante
+      for (const subLine of subLinesToDelete) {
+        await handleDeleteSubBudgetLine(subLine.id);
+      }
+
+      // 3. Maintenant que toutes les dépendances sont supprimées, supprimer la ligne budgétaire parente
       await budgetLinesService.delete(id);
+
+      // 4. Mettre à jour l'état local pour la ligne budgétaire
       setBudgetLines(prev => prev.filter(line => line.id !== id));
-      setSubBudgetLines(prev => prev.filter(line => line.budgetLineId !== id));
-      showSuccess('Ligne budgétaire supprimée', 'La ligne budgétaire et ses sous-lignes ont été supprimées');
+
+      showSuccess('Ligne budgétaire supprimée', `La ligne budgétaire et ses ${subLinesToDelete.length} sous-lignes (et leurs dépendances) ont été supprimées.`);
+    
     } catch (error) {
-      showError('Erreur', 'Impossible de supprimer la ligne budgétaire');
+      console.error('Erreur lors de la suppression de la ligne budgétaire:', error);
+      showError('Erreur', 'Impossible de supprimer la ligne budgétaire et ses dépendances.');
     }
   };
 
@@ -592,11 +697,97 @@ function App() {
 
   const handleDeleteSubBudgetLine = async (id: string) => {
     try {
+
+      // Vérifier d'abord s'il y a des engagements liés
+      const relatedEngagements = engagements.filter(eng => eng.subBudgetLineId === id);
+
+      if (relatedEngagements.length > 0) {
+        // Vérifier si des engagements ont des paiements associés
+        const engagementsWithPayments = [];
+
+        for (const engagement of relatedEngagements) {
+          const relatedPayments = payments.filter(payment => payment.engagementId === engagement.id);
+          if (relatedPayments.length > 0) {
+            engagementsWithPayments.push({
+              engagement,
+              paymentCount: relatedPayments.length
+            });
+          }
+        }
+
+        if (engagementsWithPayments.length > 0) {
+          // Afficher une confirmation détaillée
+          const engagementList = engagementsWithPayments.map(e =>
+            `- Engagement "${e.engagement.reference}" (${e.engagement.amount} ${selectedGrant?.currency || 'EUR'}) avec ${e.paymentCount} paiement(s)`
+          ).join('\n');
+
+          const confirmed = await confirmDelete(
+            'Suppression impossible avec des paiements',
+            `Cette sous-ligne budgétaire a des engagements avec des paiements associés :\n\n${engagementList}\n\nVous devez d'abord supprimer les paiements avant de pouvoir supprimer la sous-ligne budgétaire.`
+          );
+
+          if (!confirmed) {
+            return;
+          }
+
+          // Si l'utilisateur confirme, supprimer d'abord les paiements
+          showLoading('Suppression des paiements...');
+          for (const { engagement } of engagementsWithPayments) {
+            const paymentsToDelete = payments.filter(p => p.engagementId === engagement.id);
+            for (const payment of paymentsToDelete) {
+              await paymentsService.delete(payment.id);
+            }
+          }
+
+          // Mettre à jour l'état local des paiements
+          setPayments(prev => prev.filter(p => !engagementsWithPayments.some(e => e.engagement.id === p.engagementId)));
+        }
+
+        // Maintenant supprimer les engagements
+        showLoading('Suppression des engagements...');
+        for (const engagement of relatedEngagements) {
+          await engagementsService.delete(engagement.id);
+        }
+
+        // Mettre à jour l'état local des engagements
+        setEngagements(prev => prev.filter(eng => eng.subBudgetLineId !== id));
+      }
+
+      // 1. Trouver et supprimer les préfinancements liés
+      const relatedPrefinancings = prefinancings.filter(pref => pref.subBudgetLineId === id);
+      if (relatedPrefinancings.length > 0) {
+        showLoading('Suppression des préfinancements...');
+        for (const pref of relatedPrefinancings) {
+          await prefinancingsService.delete(pref.id);
+        }
+        // Mettre à jour l'état local
+        setPrefinancings(prev => prev.filter(pref => pref.subBudgetLineId !== id));
+      }
+
+      // 2. Trouver et supprimer les prêts employés liés
+      const relatedEmployeeLoans = employeeLoans.filter(loan => loan.subBudgetLineId === id);
+      if (relatedEmployeeLoans.length > 0) {
+        showLoading('Suppression des prêts employés...');
+        for (const loan of relatedEmployeeLoans) {
+          await employeeLoansService.delete(loan.id);
+        }
+        // Mettre à jour l'état local
+        setEmployeeLoans(prev => prev.filter(loan => loan.subBudgetLineId !== id));
+      }
+
+      // Enfin supprimer la sous-ligne budgétaire
       await subBudgetLinesService.delete(id);
       setSubBudgetLines(prev => prev.filter(line => line.id !== id));
-      showSuccess('Sous-ligne budgétaire supprimée', 'La sous-ligne budgétaire a été supprimée');
+
+      showSuccess(
+        'Suppression effectuée',
+        `La sous-ligne budgétaire et toutes ses dépendances ont été supprimées.`
+      );
     } catch (error) {
-      showError('Erreur', 'Impossible de supprimer la sous-ligne budgétaire');
+      console.error('Erreur lors de la suppression en cascade:', error);
+      showError('Erreur', 'Impossible de supprimer la sous-ligne budgétaire et ses dépendances');
+    } finally {
+      closeLoading();
     }
   };
 

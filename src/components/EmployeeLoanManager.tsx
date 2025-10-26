@@ -2261,6 +2261,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                                     onChange={(e) => updateLoanStatus(loan.id, e.target.value as EmployeeLoan['status'])}
                                     className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${LOAN_STATUS[loan.status].color}`}
                                   >
+                                    <option value="">Selectionnez</option>
                                     <option value="active">En cours</option>
                                     <option value="completed">Remboursé</option>
                                   </select>

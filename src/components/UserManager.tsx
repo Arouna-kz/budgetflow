@@ -608,42 +608,62 @@ const UserManager: React.FC<UserManagerProps> = ({
     setShowRoleForm(true);
   };
 
-  const handleDeleteUser = (user: User) => {
-    if (!canDeleteUsers) {
-      showError('Permission refusée', 'Vous n\'avez pas la permission de supprimer des utilisateurs');
-      return;
-    }
+  
+  
+  // Correction pour User
+  const handleDeleteUser = async (user: User) => { // <-- AJOUTER ASYNC
+      if (!canDeleteUsers) {
+        showError('Permission refusée', 'Vous n\'avez pas la permission de supprimer des utilisateurs');
+        return;
+      }
+      if (user.id === currentUser.id) {
+        showError('Action impossible', 'Vous ne pouvez pas supprimer votre propre compte');
+        return;
+      }
 
-    if (user.id === currentUser.id) {
-      showError('Action impossible', 'Vous ne pouvez pas supprimer votre propre compte');
-      return;
-    }
+      // RÉÉCRIRE CETTE PARTIE
+      const confirmed = await confirmDelete(
+        'Supprimer l\'utilisateur',
+        `Êtes-vous sûr de vouloir supprimer l'utilisateur ${user.firstName} ${user.lastName} ?`
+      );
 
-    confirmDelete(
-      'Supprimer l\'utilisateur',
-      `Êtes-vous sûr de vouloir supprimer l'utilisateur ${user.firstName} ${user.lastName} ?`,
-      () => onDeleteUser(user.id)
-    );
+      if (confirmed) {
+          onDeleteUser(user.id);
+          // Ajoutez un showSuccess ici si vous le souhaitez
+      } else {
+          console.log('Suppression utilisateur annulée');
+      }
   };
 
-  const handleDeleteRole = (role: UserRole) => {
-    if (!canDeleteRoles) {
-      showError('Permission refusée', 'Vous n\'avez pas la permission de supprimer des rôles');
-      return;
-    }
+  // Correction pour Role
+const handleDeleteRole = async (role: UserRole) => {
+  if (!canDeleteRoles) {
+    showError('Permission refusée', 'Vous n\'avez pas la permission de supprimer des rôles');
+    return;
+  }
 
-    const usersWithRole = users.filter(user => user.roleId === role.id);
-    if (usersWithRole.length > 0) {
-      showError('Action impossible', `Ce rôle est assigné à ${usersWithRole.length} utilisateur(s). Vous ne pouvez pas le supprimer.`);
-      return;
-    }
+  // CORRECTION : Calculer usersWithRole ici
+  const usersWithRole = users.filter(user => user.roleId === role.id);
+  
+  if (usersWithRole.length > 0) {
+    showError('Action impossible', `Ce rôle est assigné à ${usersWithRole.length} utilisateur(s). Vous ne pouvez pas le supprimer.`);
+    return;
+  }
 
-    confirmDelete(
-      'Supprimer le rôle',
-      `Êtes-vous sûr de vouloir supprimer le rôle ${role.name} ?`,
-      () => onDeleteRole(role.id)
-    );
-  };
+  // RÉÉCRITURE de la confirmation
+  const confirmed = await confirmDelete(
+    'Supprimer le rôle',
+    `Êtes-vous sûr de vouloir supprimer le rôle ${role.name} ?`
+  );
+
+  if (confirmed) {
+    onDeleteRole(role.id);
+    // Ajoutez un showSuccess ici si vous le souhaitez
+  } else {
+    console.log('Suppression rôle annulée');
+  }
+};
+
 
   // Options de couleurs
   const colorOptions = [
