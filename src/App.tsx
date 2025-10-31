@@ -1203,9 +1203,19 @@ function App() {
     }
   };
 
-  const handleDeleteUser = (id: string) => {
-    setUsers(prev => prev.filter(user => user.id !== id));
-    showSuccess('Utilisateur supprimé', 'L\'utilisateur a été supprimé');
+  // fonction handleDeleteUser pour supprimer un utilisateur
+  const handleDeleteUser = async (id: string) => {
+    try {
+      // Supprimer d'abord de la base de données
+      await usersService.delete(id);
+      
+      // Puis mettre à jour l'état local
+      setUsers(prev => prev.filter(user => user.id !== id));
+      showSuccess('Utilisateur supprimé', 'L\'utilisateur a été supprimé avec succès');
+    } catch (error: any) {
+      console.error('Error deleting user:', error);
+      showError('Erreur', error.message || 'Impossible de supprimer l\'utilisateur');
+    }
   };
 
   // Role management

@@ -686,54 +686,67 @@ export const usersService = {
   },
 
   async update(id: string, updates: Partial<User>): Promise<User> {
-  try {
+    try {
 
-    const { data, error } = await supabase
-      .from('users')
-      .update({
-        email: updates.email,
-        first_name: updates.firstName,
-        last_name: updates.lastName,
-        profession: updates.profession,
-        employee_id: updates.employeeId,
-        role_id: updates.roleId,
-        is_active: updates.isActive,
-        last_login: updates.lastLogin,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id)
-      .select()
-      .single();
+      const { data, error } = await supabase
+        .from('users')
+        .update({
+          email: updates.email,
+          first_name: updates.firstName,
+          last_name: updates.lastName,
+          profession: updates.profession,
+          employee_id: updates.employeeId,
+          role_id: updates.roleId,
+          is_active: updates.isActive,
+          last_login: updates.lastLogin,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id)
+        .select()
+        .single();
 
-    if (error) {
-      console.error('Supabase error details:', error);
-      throw new Error(`Failed to update user: ${error.message}`);
+      if (error) {
+        console.error('Supabase error details:', error);
+        throw new Error(`Failed to update user: ${error.message}`);
+      }
+
+      if (!data) {
+        throw new Error('No data returned from update operation');
+      }
+
+      return {
+        id: data.id,
+        email: data.email,
+        firstName: data.first_name,
+        lastName: data.last_name,
+        profession: data.profession,
+        employeeId: data.employee_id,
+        roleId: data.role_id,
+        isActive: data.is_active,
+        lastLogin: data.last_login,
+        createdAt: data.created_at,
+        updatedAt: data.updated_at,
+        createdBy: data.created_by
+      };
+    } catch (error) {
+      console.error('Error in usersService.update:', error);
+      throw error;
     }
-
-    if (!data) {
-      throw new Error('No data returned from update operation');
-    }
-
-    return {
-      id: data.id,
-      email: data.email,
-      firstName: data.first_name,
-      lastName: data.last_name,
-      profession: data.profession,
-      employeeId: data.employee_id,
-      roleId: data.role_id,
-      isActive: data.is_active,
-      lastLogin: data.last_login,
-      createdAt: data.created_at,
-      updatedAt: data.updated_at,
-      createdBy: data.created_by
-    };
-  } catch (error) {
-    console.error('Error in usersService.update:', error);
-    throw error;
-  }
-}
+  },
   
+  async delete(id: string): Promise<void> {
+    try {
+      const { error } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+    } catch (error) {
+      handleSupabaseError(error);
+      throw error;
+    }
+  }
 };
 
 // Roles Service

@@ -298,39 +298,48 @@ const UserManager: React.FC<UserManagerProps> = ({
         onUpdateUser(editingUser.id, updatedUser);
         showSuccess('Succès', 'Utilisateur modifié avec succès');
       } else {
-        const { data: authData, error: authError } = await supabase.auth.signUp({
-          email: userFormData.email,
-          password: userFormData.password,
-          options: {
-            data: {
+        // Utiliser adminService pour créer l'utilisateur SANS connexion automatique
+        try {
+          const newUser = await adminService.createUser({
+            email: userFormData.email,
+            password: userFormData.password,
+            user_metadata: {
               first_name: userFormData.firstName,
               last_name: userFormData.lastName,
               profession: userFormData.profession
-            }
-          }
-        });
+            },
+            email_confirm: true
+          });
 
-        if (authError) throw authError;
-        if (!authData.user) throw new Error('Erreur lors de la création du compte auth');
+          if (!newUser.user) throw new Error('Erreur lors de la création du compte auth');
 
-        const newUserId = authData.user.id;
+          const newUserId = newUser.user.id;
 
-        const newUserData = {
-          id: newUserId,
-          email: userFormData.email,
-          firstName: userFormData.firstName,
-          lastName: userFormData.lastName,
-          profession: userFormData.profession,
-          employeeId: userFormData.employeeId,
-          roleId: userFormData.roleId,
-          isActive: userFormData.isActive,
-          createdBy: currentUser.id
-        };
+          const newUserData = {
+            id: newUserId,
+            email: userFormData.email,
+            firstName: userFormData.firstName,
+            lastName: userFormData.lastName,
+            profession: userFormData.profession,
+            employeeId: userFormData.employeeId,
+            roleId: userFormData.roleId,
+            isActive: userFormData.isActive,
+            createdBy: currentUser.id
+          };
 
-        const newUser = await usersService.create(newUserData);
-        onAddUser(newUser);
-        
-        showSuccess('Succès', 'Utilisateur créé avec succès. Un email de confirmation a été envoyé.');
+          const createdUser = await usersService.create(newUserData);
+          onAddUser(createdUser);
+          
+          showSuccess('Succès', 'Utilisateur créé avec succès. L\'utilisateur pourra se connecter avec ses identifiants.');
+        } catch (authError: any) {
+          console.error('Error creating user with admin service:', authError);
+          
+          // Fallback sécurisé - NE PAS utiliser signUp qui connecte automatiquement
+          showError(
+            'Erreur de création', 
+            'Impossible de créer le compte utilisateur. Vérifiez que la clé de service Supabase est configurée correctement.'
+          );
+        }
       }
 
       resetUserForm();
