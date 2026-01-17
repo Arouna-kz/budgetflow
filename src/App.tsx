@@ -1426,7 +1426,7 @@ function App() {
                   </div>
                 </div> */}
                 <div className="hidden sm:block">
-                  <h1 className="text-xl font-bold text-white">budget Flow</h1>
+                  <h1 className="text-xl font-bold text-white">Budget Flow</h1>
                   <p className="text-xs text-indigo-200">Gestion Budgétaire Intelligente</p>
                 </div>
               </div>
@@ -1538,7 +1538,7 @@ function App() {
                 </div>
               </div> */}
               <div>
-                <h1 className="text-lg font-bold text-white">budget Flow</h1>
+                <h1 className="text-lg font-bold text-white">Budget Flow</h1>
                 <p className="text-xs text-indigo-200">Gestion Budgétaire</p>
               </div>
             </div>
