@@ -1308,7 +1308,7 @@ function App() {
             <Target className="w-8 h-8 text-white" />
           </div>
           <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Chargement de Budget BASE...</p>
+          <p className="text-gray-600">Chargement de budget Flow...</p>
           <p className="text-xs text-gray-500 mt-2">Vérification de l'authentification...</p>
         </div>
       </div>
@@ -1415,18 +1415,18 @@ function App() {
                   <Target className="w-6 h-6 text-white" />
                 </div>
                 {/* <div className="p-2 bg-white/10 backdrop-blur-sm rounded-xl border border-white/20"> */}
-                <div className="backdrop-blur-sm rounded-xl border border-white/20">
+                {/* <div className="backdrop-blur-sm rounded-xl border border-white/20">
                 
                   <div className="relative w-20 h-8">
                     <img
-                      src="/budgetbase/logo.png"
+                      src="/budgetflow/logo.png"
                       alt="Logo"
                       className="object-contain"
                     />
                   </div>
-                </div>
+                </div> */}
                 <div className="hidden sm:block">
-                  <h1 className="text-xl font-bold text-white">Budget BASE</h1>
+                  <h1 className="text-xl font-bold text-white">budget Flow</h1>
                   <p className="text-xs text-indigo-200">Gestion Budgétaire Intelligente</p>
                 </div>
               </div>
@@ -1528,17 +1528,17 @@ function App() {
           {/* Mobile Header Info */}
           <div className="xl:hidden p-6 border-b border-indigo-700/50">
             <div className="flex items-center space-x-3 mb-4">
-              <div className="p-2 bg-white/10 backdrop-blur-sm rounded-xl border border-white/20">
+              {/* <div className="p-2 bg-white/10 backdrop-blur-sm rounded-xl border border-white/20">
                 <div className="relative w-20 h-8">
                   <img
-                    src="/budgetbase/logo.png"
+                    src="/budgetflow/logo.png"
                     alt="Logo"
                     className="object-contain"
                   />
                 </div>
-              </div>
+              </div> */}
               <div>
-                <h1 className="text-lg font-bold text-white">Budget BASE</h1>
+                <h1 className="text-lg font-bold text-white">budget Flow</h1>
                 <p className="text-xs text-indigo-200">Gestion Budgétaire</p>
               </div>
             </div>

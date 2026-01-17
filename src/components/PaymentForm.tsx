@@ -436,7 +436,7 @@ export default function PaymentForm({
             <p>Date: ${new Date(formData.date).toLocaleDateString('fr-FR')}</p>
           </div>
           <div style="width: 80px; height: 32px;">
-            <img src="/budgetbase/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
+            <img src="/budgetflow/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
           </div>
         </div>
         
@@ -651,7 +651,7 @@ export default function PaymentForm({
             <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${formData.paymentNumber}</h2>
           </div>
           <div style="width: 80px; height: 32px;">
-            <img src="/budgetbase/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
+            <img src="/budgetflow/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
           </div>
         </div>
         

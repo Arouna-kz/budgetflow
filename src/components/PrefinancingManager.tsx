@@ -715,7 +715,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
             <p>Date de la demande: ${new Date(formData.date).toLocaleDateString('fr-FR')}</p>
           </div>
           <div style="width: 80px; height: 32px;">
-            <img src="/budgetbase/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
+            <img src="/budgetflow/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
           </div>
         </div>
         
@@ -871,7 +871,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
             <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${getPurposeLabel(formData.purpose)}</h2>
           </div>
           <div style="width: 80px; height: 32px;">
-            <img src="/budgetbase/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
+            <img src="/budgetflow/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
           </div>
         </div>
         

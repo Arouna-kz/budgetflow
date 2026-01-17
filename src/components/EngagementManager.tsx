@@ -649,7 +649,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
             })}</p>
           </div>
           <div style="width: 80px; height: 32px;">
-            <img src="/budgetbase/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
+            <img src="/budgetflow/logo.png" alt="Logo" style="width: 100%; height: 100%; object-fit: contain;" />
           </div>
         </div>
         

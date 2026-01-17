@@ -376,7 +376,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       // Charger le logo
       let logo: HTMLImageElement | null = null;
       try {
-        logo = await loadImage('/budgetbase/logo.png');
+        logo = await loadImage('/budgetflow/logo.png');
       } catch (error) {
         console.warn('Logo non chargé, continuation sans logo');
       }
@@ -651,7 +651,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         
         // Copyright
         pdf.text(
-          `© ${new Date().getFullYear()} BudgetBase - Document généré automatiquement`,
+          `© ${new Date().getFullYear()} budgetflow - Document généré automatiquement`,
           pageWidth / 2,
           pageHeight - 5,
           { align: 'center' }

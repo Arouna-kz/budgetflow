@@ -242,7 +242,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
             try {
               // Créer une image pour le logo
               const logoImg = new Image();
-              logoImg.src = '/budgetbase/logo.png';
+              logoImg.src = '/budgetflow/logo.png';
               
               logoImg.onload = () => {
                 try {
@@ -668,7 +668,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
           );
           
           pdf.text(
-            `© ${new Date().getFullYear()} BudgetBase - Document généré automatiquement`,
+            `© ${new Date().getFullYear()} budgetflow - Document généré automatiquement`,
             pageWidth / 2,
             pageHeight - 5,
             { align: 'center' }
