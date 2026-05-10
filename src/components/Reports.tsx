@@ -622,8 +622,8 @@ const Reports: React.FC<ReportsProps> = ({
         {/* Logo ajouté ici */}
         <div className="print-logo">
           <img 
-            src="/budgetbase/logo.png" 
-            alt="Logo BudgetBase" 
+            src="/budgetflow/logo.png" 
+            alt="Logo BudgetFlow" 
             className="print-logo-img"
           />
         </div>

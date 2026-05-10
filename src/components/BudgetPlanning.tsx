@@ -242,7 +242,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
             try {
               // Créer une image pour le logo
               const logoImg = new Image();
-              logoImg.src = '/budgetbase/logo.png';
+              logoImg.src = '/budgetflow/logo.png';
               
               logoImg.onload = () => {
                 try {
@@ -668,7 +668,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
           );
           
           pdf.text(
-            `© ${new Date().getFullYear()} BudgetBase - Document généré automatiquement`,
+            `© ${new Date().getFullYear()} BudgetFlow - Document généré automatiquement`,
             pageWidth / 2,
             pageHeight - 5,
             { align: 'center' }
@@ -890,6 +890,8 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
 
     // Suppression avec confirmation
     const handleDeleteBudgetLine = async (line: BudgetLine) => {
+      console.log('BudgetPlanning.tsx - Début suppression ligne:', line.id, line.name);
+      
       if (!canDelete) {
         showError('Permission refusée', 'Vous n\'avez pas la permission de supprimer des lignes budgétaires');
         return;
@@ -901,16 +903,15 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
           `Êtes-vous sûr de vouloir supprimer la ligne "${line.name}" ? Cette action est irréversible.`
         );
         
-        // CORRECTION : Vérifier result.isConfirmed au lieu de result
         if (result) {
-          onDeleteBudgetLine(line.id);
+          console.log('BudgetPlanning.tsx - Appel de onDeleteBudgetLine avec ID:', line.id);
+          await onDeleteBudgetLine(line.id);  // <-- Ceci appelle la fonction dans App.tsx
           showSuccess('Ligne supprimée', 'La ligne budgétaire a été supprimée avec succès');
         } else {
-          // L'utilisateur a annulé, ne rien faire
-          console.log('Suppression annulée par l\'utilisateur');
+          console.log('BudgetPlanning.tsx - Suppression annulée par l\'utilisateur');
         }
       } catch (error) {
-        console.error('Erreur lors de la confirmation de suppression:', error);
+        console.error('BudgetPlanning.tsx - Erreur lors de la confirmation de suppression:', error);
         showError('Erreur', 'Une erreur est survenue lors de la confirmation de suppression');
       }
     };
