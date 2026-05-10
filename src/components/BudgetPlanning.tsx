@@ -243,7 +243,6 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
               // Créer une image pour le logo
               const logoImg = new Image();
               logoImg.src = '/budgetflow/logo.png';
-              logoImg.src = '/budgetflow/logo.png';
               
               logoImg.onload = () => {
                 try {
