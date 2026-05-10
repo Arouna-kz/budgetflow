@@ -1562,7 +1562,7 @@ function App() {
             <Target className="w-8 h-8 text-white" />
           </div>
           <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Chargement de budget Flow...</p>
+          <p className="text-gray-600">Chargement de Budget Flow...</p>
           <p className="text-xs text-gray-500 mt-2">Vérification de l'authentification...</p>
         </div>
       </div>
