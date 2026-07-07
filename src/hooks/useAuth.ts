@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { User as SupabaseUser, AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { User, UserRole } from '../types/user';
@@ -9,6 +9,10 @@ export const useAuth = () => {
   const [userRole, setUserRole] = useState<UserRole | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Évite les chargements de profil concurrents/redondants (TOKEN_REFRESHED, doubles événements)
+  const loadedUserIdRef = useRef<string | null>(null);
+  const loadingProfileRef = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -41,22 +45,26 @@ export const useAuth = () => {
     initializeAuth();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event: AuthChangeEvent, session: Session | null) => {
+      (event: AuthChangeEvent, session: Session | null) => {
         if (!mounted) return;
 
-        try {
-          if (session?.user) {
-            setUser(session.user);
-            await loadUserProfile(session.user.id);
-          } else {
-            setUser(null);
-            setUserProfile(null);
-            setUserRole(null);
-            setLoading(false);
+        if (session?.user) {
+          setUser(session.user);
+          // ⚠️ Ne PAS appeler d'API Supabase (ex: .from().select()) directement dans ce
+          // callback : cela détient le verrou d'auth et provoque un deadlock (timeout).
+          // On diffère hors du callback et on évite de recharger le même profil.
+          if (loadedUserIdRef.current !== session.user.id) {
+            const userId = session.user.id;
+            setTimeout(() => {
+              if (mounted) loadUserProfile(userId);
+            }, 0);
           }
-        } catch (err) {
-          console.error('Error in auth state change:', err);
-          if (mounted) setLoading(false);
+        } else {
+          loadedUserIdRef.current = null;
+          setUser(null);
+          setUserProfile(null);
+          setUserRole(null);
+          setLoading(false);
         }
       }
     );
@@ -68,8 +76,12 @@ export const useAuth = () => {
   }, []);
 
   const loadUserProfile = async (userId: string) => {
+    // Évite les chargements concurrents (initializeAuth + INITIAL_SESSION, doubles événements)
+    if (loadingProfileRef.current) return;
+    loadingProfileRef.current = true;
+    loadedUserIdRef.current = userId;
     let mounted = true;
-    
+
     try {
       // Timeout de 10 secondes pour le profil
       const profilePromise = supabase
@@ -159,11 +171,15 @@ export const useAuth = () => {
       
       if (mounted) setLoading(false);
     } catch (err: any) {
-      console.error('Error loading user profile:', err);
+      // Échec (ex: timeout) → réautoriser un nouvel essai lors d'un prochain événement d'auth
+      loadedUserIdRef.current = null;
+      console.warn('Chargement du profil utilisateur échoué:', err?.message || err);
       if (mounted) {
         setError(err.message);
         setLoading(false);
       }
+    } finally {
+      loadingProfileRef.current = false;
     }
   };
 

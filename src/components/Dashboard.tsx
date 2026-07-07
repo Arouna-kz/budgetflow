@@ -49,9 +49,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const getTotalDisbursed = (grantId: string) => {
     let totalDisbursed = 0;
 
-    // 1. Paiements décaissés (statut 'paid') 
-    const grantPayments = (payments || []).filter(p => p.grantId === grantId && p.status === 'paid');
-    const paymentsAmount = grantPayments.reduce((sum, payment) => sum + payment.amount, 0);
+    // 1. Paiements décaissés : cumule l'échelonné déjà payé (in_progress) + le direct complet (paid)
+    const grantPayments = (payments || []).filter(p =>
+      p.grantId === grantId && (p.status === 'paid' || p.status === 'in_progress')
+    );
+    const paymentsAmount = grantPayments.reduce((sum, payment) => {
+      // Paiement échelonné : additionner ce qui a déjà été payé (partiels)
+      if (payment.partialPayments && payment.partialPayments.length > 0) {
+        return sum + payment.partialPayments.reduce((s, pp) => s + pp.amount, 0);
+      }
+      // Paiement direct complet
+      if (payment.status === 'paid') {
+        return sum + payment.amount;
+      }
+      return sum;
+    }, 0);
     totalDisbursed += paymentsAmount;
 
     // 2. Préfinancements décaissés (statut 'paid' ou 'repaid')
@@ -132,12 +144,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const grant = grants.find(g => g.id === budgetLine.grantId);
       if (!grant) return sum;
       
-      // Calculer le décaissement pour les paiements de cette sous-ligne
-      const subLinePayments = (payments || []).filter(p => 
-        p.subBudgetLineId === subLine.id && p.status === 'paid'
+      // Décaissement réel : échelonné déjà payé (in_progress) + direct complet (paid)
+      const subLinePayments = (payments || []).filter(p =>
+        p.subBudgetLineId === subLine.id && (p.status === 'paid' || p.status === 'in_progress')
       );
-      const paymentsAmount = subLinePayments.reduce((sum, payment) => sum + payment.amount, 0);
-      
+      const paymentsAmount = subLinePayments.reduce((s, payment) => {
+        if (payment.partialPayments && payment.partialPayments.length > 0) {
+          return s + payment.partialPayments.reduce((acc, pp) => acc + pp.amount, 0);
+        }
+        if (payment.status === 'paid') {
+          return s + payment.amount;
+        }
+        return s;
+      }, 0);
+
       return sum + paymentsAmount;
     }, 0);
 
@@ -707,7 +727,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       {/* Styles CSS pour l'animation */}
-      <style jsx>{`
+      <style dangerouslySetInnerHTML={{ __html: `
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(-10px); }
           to { opacity: 1; transform: translateY(0); }
@@ -715,7 +735,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         .animate-fadeIn {
           animation: fadeIn 0.3s ease-out;
         }
-      `}</style>
+      `}} />
     </div>
   );
 };

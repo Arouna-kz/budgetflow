@@ -53,6 +53,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [showOnlyToSign, setShowOnlyToSign] = useState(false);
   const [dateFilter, setDateFilter] = useState<string>('');
   const [purposeFilter, setPurposeFilter] = useState<string>('all');
   const [expandedRows, setExpandedRows] = useState<{ [key: string]: boolean }>({});
@@ -156,22 +157,24 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     return true;
   };
 
-  const getPendingSignatures = (): Prefinancing[] => {
+  // Le préfinancement nécessite-t-il la signature de l'utilisateur courant ?
+  const needsUserSignature = (prefinancing: Prefinancing): boolean => {
     const userProfession = getUserProfession();
-    
-    return prefinancings.filter(prefinancing => {
-      if (userProfession === 'Coordinateur de la Subvention') {
-        return !prefinancing.approvals?.supervisor1?.signature;
-      } else if (userProfession === 'Comptable') {
-        return !prefinancing.approvals?.supervisor2?.signature;
-      } else if (userProfession === 'Coordonnateur National') {
-        const hasSupervisor1Signed = prefinancing.approvals?.supervisor1?.signature;
-        const hasSupervisor2Signed = prefinancing.approvals?.supervisor2?.signature;
-        const hasFinalSigned = prefinancing.approvals?.finalApproval?.signature;
-        return hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned;
-      }
-      return false;
-    });
+    if (userProfession === 'Coordinateur de la Subvention') {
+      return !prefinancing.approvals?.supervisor1?.signature;
+    } else if (userProfession === 'Comptable') {
+      return !prefinancing.approvals?.supervisor2?.signature;
+    } else if (userProfession === 'Coordonnateur National') {
+      const hasSupervisor1Signed = prefinancing.approvals?.supervisor1?.signature;
+      const hasSupervisor2Signed = prefinancing.approvals?.supervisor2?.signature;
+      const hasFinalSigned = prefinancing.approvals?.finalApproval?.signature;
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned);
+    }
+    return false;
+  };
+
+  const getPendingSignatures = (): Prefinancing[] => {
+    return prefinancings.filter(prefinancing => needsUserSignature(prefinancing));
   };
 
   // 🎯 MODIFICATION : Fonction pour signer un préfinancement existant (édition)
@@ -287,20 +290,24 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
   const userProfession = getUserProfession();
   const userFullName = getUserFullName();
   const pendingSignatures = getPendingSignatures();
+  // ✅ Nombre de préfinancements en attente de MA signature (accès rapide)
+  const toSignCount = prefinancings.filter(p => p.status === 'pending' && needsUserSignature(p)).length;
 
   // FONCTIONS DE RECHERCHE ET FILTRAGE
   const filteredPrefinancings = prefinancings.filter(prefinancing => {
     const searchLower = searchTerm.toLowerCase();
-    const matchesSearch = 
+    const matchesSearch =
       prefinancing.prefinancingNumber.toLowerCase().includes(searchLower) ||
       prefinancing.description.toLowerCase().includes(searchLower) ||
       (prefinancing.purpose && getPurposeLabel(prefinancing.purpose).toLowerCase().includes(searchLower));
 
     const matchesStatus = statusFilter === 'all' || prefinancing.status === statusFilter;
+    // ✅ Filtre "À signer" : uniquement les préfinancements en attente nécessitant ma signature
+    const matchesToSign = !showOnlyToSign || (prefinancing.status === 'pending' && needsUserSignature(prefinancing));
     const matchesDate = !dateFilter || prefinancing.expectedRepaymentDate === dateFilter;
     const matchesPurpose = purposeFilter === 'all' || prefinancing.purpose === purposeFilter;
 
-    return matchesSearch && matchesStatus && matchesDate && matchesPurpose;
+    return matchesSearch && matchesStatus && matchesToSign && matchesDate && matchesPurpose;
   });
 
   const sortedPrefinancings = [...filteredPrefinancings].sort((a, b) => {
@@ -1096,16 +1103,23 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
           <p className="text-gray-600 mt-1">Avances de trésorerie et suivi des remboursements</p>
         </div>
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          {/* Notification des signatures en attente */}
-          {pendingSignatures.length > 0 && (
-            <div className="bg-orange-50 border border-orange-200 rounded-lg px-4 py-2">
-              <div className="flex items-center space-x-2">
-                <AlertCircle className="w-4 h-4 text-orange-600" />
-                <span className="text-sm font-medium text-orange-800">
-                  {pendingSignatures.length} signature(s) en attente
-                </span>
-              </div>
-            </div>
+          {/* Accès rapide aux préfinancements à signer */}
+          {canViewSignatureSection() && (
+            <button
+              type="button"
+              onClick={() => setShowOnlyToSign(prev => !prev)}
+              className={`rounded-lg px-4 py-2 border transition-colors flex items-center space-x-2 ${
+                showOnlyToSign
+                  ? 'bg-orange-600 border-orange-600 text-white'
+                  : 'bg-orange-50 border-orange-200 text-orange-800 hover:bg-orange-100'
+              }`}
+              title="Afficher uniquement les préfinancements qui me restent à signer"
+            >
+              <AlertCircle className="w-4 h-4" />
+              <span className="text-sm font-medium">
+                {showOnlyToSign ? 'Tout afficher' : `À signer (${toSignCount})`}
+              </span>
+            </button>
           )}
           
           {canCreate && (
@@ -1179,11 +1193,12 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
           
           <div className="flex items-center space-x-2 text-sm text-gray-600">
             <span>{sortedPrefinancings.length} préfinancement(s)</span>
-            {(searchTerm || statusFilter !== 'all' || dateFilter || purposeFilter !== 'all') && (
+            {(searchTerm || statusFilter !== 'all' || showOnlyToSign || dateFilter || purposeFilter !== 'all') && (
               <button
                 onClick={() => {
                   setSearchTerm('');
                   setStatusFilter('all');
+                  setShowOnlyToSign(false);
                   setDateFilter('');
                   setPurposeFilter('all');
                 }}

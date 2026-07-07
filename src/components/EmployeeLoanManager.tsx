@@ -53,6 +53,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [showOnlyToSign, setShowOnlyToSign] = useState(false);
 
   // État pour gérer l'expansion du contenu des cellules
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -162,22 +163,24 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   };
 
   // Récupère les prêts en attente de signature pour l'utilisateur actuel
-  const getPendingSignatures = (): EmployeeLoan[] => {
+  // Le prêt nécessite-t-il la signature de l'utilisateur courant ?
+  const needsUserSignature = (loan: EmployeeLoan): boolean => {
     const userProfession = getUserProfession();
-    
-    return loans.filter(loan => {
-      if (userProfession === 'Coordinateur de la Subvention') {
-        return !loan.approvals?.supervisor1?.signature;
-      } else if (userProfession === 'Comptable') {
-        return !loan.approvals?.supervisor2?.signature;
-      } else if (userProfession === 'Coordonnateur National') {
-        const hasSupervisor1Signed = loan.approvals?.supervisor1?.signature;
-        const hasSupervisor2Signed = loan.approvals?.supervisor2?.signature;
-        const hasFinalSigned = loan.approvals?.finalApproval?.signature;
-        return hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned;
-      }
-      return false;
-    });
+    if (userProfession === 'Coordinateur de la Subvention') {
+      return !loan.approvals?.supervisor1?.signature;
+    } else if (userProfession === 'Comptable') {
+      return !loan.approvals?.supervisor2?.signature;
+    } else if (userProfession === 'Coordonnateur National') {
+      const hasSupervisor1Signed = loan.approvals?.supervisor1?.signature;
+      const hasSupervisor2Signed = loan.approvals?.supervisor2?.signature;
+      const hasFinalSigned = loan.approvals?.finalApproval?.signature;
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned);
+    }
+    return false;
+  };
+
+  const getPendingSignatures = (): EmployeeLoan[] => {
+    return loans.filter(loan => needsUserSignature(loan));
   };
 
   // Fonction pour ouvrir le modal de détails
@@ -226,6 +229,8 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const userProfession = getUserProfession();
   const userFullName = getUserFullName();
   const pendingSignatures = getPendingSignatures();
+  // ✅ Nombre de prêts en attente de MA signature (accès rapide)
+  const toSignCount = loans.filter(l => l.status === 'pending' && needsUserSignature(l)).length;
 
   // Définir selectedGrant basé sur selectedGrantId ou la subvention la plus récente
   const selectedGrant = selectedGrantId 
@@ -756,7 +761,10 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
 
     const matchesStatus = statusFilter === 'all' || loan.status === statusFilter;
 
-    return matchesSearch && matchesStatus;
+    // ✅ Filtre "À signer" : uniquement les prêts en attente nécessitant ma signature
+    const matchesToSign = !showOnlyToSign || (loan.status === 'pending' && needsUserSignature(loan));
+
+    return matchesSearch && matchesStatus && matchesToSign;
   });
 
   // Tri des prêts
@@ -1183,16 +1191,23 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
           <p className="text-gray-600 mt-1">Prêts sur compte bancaire et suivi des remboursements</p>
         </div>
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          {/* Notification des signatures en attente */}
-          {pendingSignatures.length > 0 && (
-            <div className="bg-orange-50 border border-orange-200 rounded-lg px-4 py-2">
-              <div className="flex items-center space-x-2">
-                <AlertCircle className="w-4 h-4 text-orange-600" />
-                <span className="text-sm font-medium text-orange-800">
-                  {pendingSignatures.length} signature(s) en attente
-                </span>
-              </div>
-            </div>
+          {/* Accès rapide aux prêts à signer */}
+          {canViewSignatureSection() && (
+            <button
+              type="button"
+              onClick={() => setShowOnlyToSign(prev => !prev)}
+              className={`rounded-lg px-4 py-2 border transition-colors flex items-center space-x-2 ${
+                showOnlyToSign
+                  ? 'bg-orange-600 border-orange-600 text-white'
+                  : 'bg-orange-50 border-orange-200 text-orange-800 hover:bg-orange-100'
+              }`}
+              title="Afficher uniquement les prêts qui me restent à signer"
+            >
+              <AlertCircle className="w-4 h-4" />
+              <span className="text-sm font-medium">
+                {showOnlyToSign ? 'Tout afficher' : `À signer (${toSignCount})`}
+              </span>
+            </button>
           )}
           
           {canCreate && (
@@ -1245,11 +1260,12 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex items-center space-x-4 text-sm text-gray-600">
             <span>{sortedLoans.length} prêt(s) trouvé(s)</span>
-            {(searchTerm || statusFilter !== 'all') && (
+            {(searchTerm || statusFilter !== 'all' || showOnlyToSign) && (
               <button
                 onClick={() => {
                   setSearchTerm('');
                   setStatusFilter('all');
+                  setShowOnlyToSign(false);
                 }}
                 className="text-blue-600 hover:text-blue-800 text-sm font-medium"
               >

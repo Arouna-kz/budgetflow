@@ -1,0 +1,24 @@
+INTÉGRATION DES CAPTURES D'ÉCRAN DANS LA PRÉSENTATION BUDGETFLOW
+================================================================
+
+Pour que vos captures apparaissent automatiquement dans le PowerPoint,
+enregistrez chaque image dans CE dossier avec EXACTEMENT le nom indiqué :
+
+  01_tableau_de_bord.png    ->  Tableau de Bord Budgétaire
+  02_subventions.png        ->  Gestion des Subventions
+  03_planification.png      ->  Planification Budgétaire
+  04_suivi_budgetaire.png   ->  Suivi Budgétaire
+  05_engagements.png        ->  Gestion des Engagements
+  06_paiements.png          ->  Gestion des Paiements
+  07_tresorerie.png         ->  État de Trésorerie
+  08_prefinancements.png    ->  Préfinancements (et/ou Prêts employés)
+  10_rapports.png           ->  Rapports Budgétaires
+
+CONSEILS
+- Format PNG ou JPG. Idéalement des captures larges (page complète).
+- Respectez le nom exact (minuscules, underscores, extension .png).
+- Une fois les fichiers déposés ici, demandez « régénère la présentation ».
+  Les images seront insérées automatiquement dans les cadres prévus.
+
+Si un fichier est absent, la diapositive affiche simplement un cadre
+indiquant le nom de fichier attendu (aucune erreur).

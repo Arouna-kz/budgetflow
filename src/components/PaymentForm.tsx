@@ -363,7 +363,8 @@ export default function PaymentForm({
       purchaseOrderNumber: formData.purchaseOrderNumber || undefined,
       serviceAcceptance: formData.serviceAcceptance,
       controlNotes: formData.controlNotes || undefined,
-      status: 'pending',
+      // ✅ Préserver le statut existant en modification ; "pending" seulement à la création
+      status: editingPayment ? editingPayment.status : 'pending',
       approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined
     };
 

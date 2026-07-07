@@ -1,7 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { TrendingUp, AlertTriangle, CheckCircle, Eye, FileText, Download, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Search, Filter, Menu, X, ChevronRight as ExpandIcon, ChevronDown as CollapseIcon } from 'lucide-react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { 
+  TrendingUp, AlertTriangle, CheckCircle, Eye, FileText, Download, ChevronUp, ChevronDown, 
+  ChevronLeft, ChevronRight, Search, Filter, Menu, X, ChevronRight as ExpandIcon, 
+  ChevronDown as CollapseIcon, FileSpreadsheet, DollarSign, Clock
+} from 'lucide-react';
 import { BudgetLine, SubBudgetLine, Grant, Engagement, Payment } from '../types';
 import jsPDF from 'jspdf';
+import * as XLSX from 'xlsx';
 import { showSuccess, showError, showValidationError, confirmDelete, showWarning } from '../utils/alerts';
 import { usePermissions } from '../hooks/usePermissions';
 
@@ -15,8 +20,19 @@ interface BudgetTrackingProps {
   onViewEngagements: (subBudgetLineId: string) => void;
 }
 
-type SortField = 'name' | 'code' | 'notifiedAmount' | 'engagedAmount' | 'spentAmount' | 'availableAmount' | 'engagementRate' | 'spentRate';
+type SortField = 'name' | 'code' | 'notifiedAmount' | 'engagedAmount' | 'spentAmount' | 'availableAmount' | 'engagementRate' | 'spentRate' | 'inProgressAmount' | 'remainingToPay' | 'progressRate';
 type SortDirection = 'asc' | 'desc';
+
+// Interface pour les statistiques de paiement
+interface PaymentStats {
+  totalPaid: number;
+  totalInProgress: number;
+  remainingToPay: number;
+  progressRate: number;
+  partialPaymentsCount: number;
+  fullPaymentsCount: number;
+  totalEngaged: number;
+}
 
 const BudgetTracking: React.FC<BudgetTrackingProps> = ({ 
   budgetLines, 
@@ -27,7 +43,9 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   selectedGrantId, 
   onViewEngagements 
 }) => {
+  // États
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [isGeneratingExcel, setIsGeneratingExcel] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [searchTerm, setSearchTerm] = useState('');
@@ -37,26 +55,21 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
-  
-  // Nouvel état pour gérer l'expansion des textes
   const [expandedTexts, setExpandedTexts] = useState<{[key: string]: boolean}>({});
   
   const tableRef = useRef<HTMLTableElement>(null);
 
-  // Vérification des permissions
+  // Permissions
   const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
-
-  // Définition des permissions spécifiques au module
   const canView = hasPermission('tracking', 'view');
   const canExport = hasPermission('tracking', 'export');
   const canViewDetails = hasPermission('tracking', 'view_details');
 
-  // Utiliser directement les données filtrées par l'App
   const filteredBudgetLines = budgetLines;
   const filteredSubBudgetLines = subBudgetLines;
   const selectedGrant = grants.length > 0 ? grants[0] : null;
 
-  // Détection de la taille d'écran
+  // Responsive
   useEffect(() => {
     const checkScreenSize = () => {
       setIsMobileView(window.innerWidth < 768);
@@ -70,22 +83,174 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     return () => window.removeEventListener('resize', checkScreenSize);
   }, []);
 
-  // 🎯 FONCTIONS DE CALCUL RÉELLES POUR LE DÉCAISSEMENT (PAIEMENTS UNIQUEMENT)
-  const getSpentAmount = (subBudgetLineId: string) => {
-    // 1. Paiements décaissés (statut 'paid') pour cette sous-ligne budgétaire
-    const linePayments = (payments || []).filter(p => 
-      p.subBudgetLineId === subBudgetLineId && p.status === 'paid'
+  // ============================================
+  // FONCTIONS DE CALCUL AVEC PAIEMENTS ÉCHELONNÉS
+  // ============================================
+
+  /**
+   * Calcule le montant total payé pour une sous-ligne budgétaire
+   * Prend en compte les paiements complets et les paiements partiels
+   */
+  const getTotalPaidForSubLine = (subBudgetLineId: string): number => {
+    const linePayments = payments.filter(p => 
+      p.subBudgetLineId === subBudgetLineId && 
+      (p.status === 'paid' || p.status === 'in_progress')
     );
-    const paymentsAmount = linePayments.reduce((sum, payment) => sum + payment.amount, 0);
     
-    return paymentsAmount;
+    return linePayments.reduce((sum, payment) => {
+      // Si le paiement a des paiements partiels, sommer ceux-ci
+      if (payment.partialPayments && payment.partialPayments.length > 0) {
+        const totalPaid = payment.partialPayments.reduce((s, pp) => s + pp.amount, 0);
+        return sum + totalPaid;
+      }
+      // Sinon, prendre le montant total du paiement
+      return sum + payment.amount;
+    }, 0);
   };
 
+  /**
+   * Calcule le montant total en cours de paiement pour une sous-ligne
+   * (montants engagés mais pas encore payés)
+   */
+  const getInProgressAmountForSubLine = (subBudgetLineId: string): number => {
+    const linePayments = payments.filter(p => 
+      p.subBudgetLineId === subBudgetLineId && 
+      p.status === 'in_progress' &&
+      p.partialPayments && 
+      p.partialPayments.length > 0
+    );
+    
+    return linePayments.reduce((sum, payment) => {
+      const totalPaid = payment.partialPayments?.reduce((s, pp) => s + pp.amount, 0) || 0;
+      return sum + (payment.amount - totalPaid);
+    }, 0);
+  };
+
+  /**
+   * Calcule le montant restant à payer pour une sous-ligne
+   */
+  const getRemainingToPayForSubLine = (subBudgetLineId: string): number => {
+    // ✅ Utiliser engagedAmount (engagements approuvés uniquement), comme la carte
+    // "Montant Engagé" et la page Gestion des subventions. Les engagements rejetés
+    // retournent au disponible et ne doivent donc pas gonfler le reste à payer.
+    const line = subBudgetLines.find(l => l.id === subBudgetLineId);
+    const totalEngaged = line ? line.engagedAmount : 0;
+    const totalPaid = getTotalPaidForSubLine(subBudgetLineId);
+    return Math.max(0, totalEngaged - totalPaid);
+  };
+
+  /**
+   * Obtient les statistiques complètes de paiement pour une sous-ligne
+   */
+  const getPaymentStatsForSubLine = (subBudgetLineId: string): PaymentStats => {
+    // ✅ Base engagée = engagedAmount (approuvés uniquement), cohérent avec le reste à payer
+    const line = subBudgetLines.find(l => l.id === subBudgetLineId);
+    const totalEngaged = line ? line.engagedAmount : 0;
+
+    const linePayments = payments.filter(p =>
+      p.subBudgetLineId === subBudgetLineId &&
+      (p.status === 'paid' || p.status === 'in_progress')
+    );
+    
+    let totalPaid = 0;
+    let partialPaymentsCount = 0;
+    let fullPaymentsCount = 0;
+    let totalInProgress = 0;
+    
+    linePayments.forEach(payment => {
+      if (payment.partialPayments && payment.partialPayments.length > 0) {
+        const paid = payment.partialPayments.reduce((s, pp) => s + pp.amount, 0);
+        totalPaid += paid;
+        partialPaymentsCount++;
+        
+        // Calculer le montant en cours pour ce paiement
+        if (payment.status === 'in_progress') {
+          totalInProgress += (payment.amount - paid);
+        }
+        
+        // Si le paiement partiel est complet, il compte aussi comme paiement complet
+        if (paid >= payment.amount) {
+          fullPaymentsCount++;
+        }
+      } else {
+        totalPaid += payment.amount;
+        fullPaymentsCount++;
+      }
+    });
+    
+    const remainingToPay = Math.max(0, totalEngaged - totalPaid);
+    const progressRate = totalEngaged > 0 ? (totalPaid / totalEngaged) * 100 : 0;
+    
+    return {
+      totalPaid,
+      totalInProgress,
+      remainingToPay,
+      progressRate,
+      partialPaymentsCount,
+      fullPaymentsCount,
+      totalEngaged
+    };
+  };
+
+  /**
+   * Calcule le montant décaissé pour une sous-ligne.
+   * ✅ Cumule les décaissements réels : montants déjà payés de façon échelonnée
+   * (paiements in_progress) + paiements directs complets (paid).
+   */
+  const getSpentAmount = (subBudgetLineId: string) => {
+    const linePayments = payments.filter(p =>
+      p.subBudgetLineId === subBudgetLineId &&
+      (p.status === 'paid' || p.status === 'in_progress')
+    );
+    return linePayments.reduce((sum, payment) => {
+      // Paiement échelonné : additionner ce qui a déjà été payé (partiels)
+      if (payment.partialPayments && payment.partialPayments.length > 0) {
+        const totalPaid = payment.partialPayments.reduce((s, pp) => s + pp.amount, 0);
+        return sum + totalPaid;
+      }
+      // Paiement direct complet
+      if (payment.status === 'paid') {
+        return sum + payment.amount;
+      }
+      return sum;
+    }, 0);
+  };
+
+  /**
+   * Calcule le total décaissé pour toutes les sous-lignes
+   */
   const getTotalDisbursedForAllSubBudgetLines = () => {
     return filteredSubBudgetLines.reduce((total, line) => total + getSpentAmount(line.id), 0);
   };
 
-  // Filtrer les sous-lignes budgétaires selon les sélections
+  /**
+   * Calcule le total des paiements en cours pour toutes les sous-lignes
+   */
+  const getTotalInProgressForAllSubBudgetLines = () => {
+    return filteredSubBudgetLines.reduce((total, line) => total + getInProgressAmountForSubLine(line.id), 0);
+  };
+
+  /**
+   * Calcule le total restant à payer pour toutes les sous-lignes
+   */
+  const getTotalRemainingToPayForAllSubBudgetLines = () => {
+    return filteredSubBudgetLines.reduce((total, line) => total + getRemainingToPayForSubLine(line.id), 0);
+  };
+
+  /**
+   * Compte le nombre de paiements échelonnés actifs
+   */
+  const getActivePartialPaymentsCount = (): number => {
+    return payments.filter(p => 
+      p.partialPayments && 
+      p.partialPayments.length > 0 && 
+      p.status !== 'paid'
+    ).length;
+  };
+
+  /**
+   * Récupère les sous-lignes filtrées par lignes budgétaires sélectionnées
+   */
   const getFilteredSubBudgetLines = () => {
     if (selectedBudgetLines.length === 0) {
       return filteredSubBudgetLines;
@@ -97,12 +262,15 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
 
   const filteredSubBudgetLinesData = getFilteredSubBudgetLines();
 
-  // Réinitialiser la page quand les données changent
+  // Mise à jour de la page lorsque les filtres changent
   useEffect(() => {
     setCurrentPage(1);
   }, [searchTerm, filteredSubBudgetLinesData.length, selectedBudgetLines]);
 
-  // Fonction pour basculer l'expansion d'un texte
+  // ============================================
+  // FONCTIONS D'EXPANSION DE TEXTE
+  // ============================================
+
   const toggleTextExpansion = (lineId: string, field: string) => {
     const key = `${lineId}-${field}`;
     setExpandedTexts(prev => ({
@@ -111,12 +279,10 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     }));
   };
 
-  // Fonction pour vérifier si un texte est trop long et nécessite une expansion
   const isTextLong = (text: string, maxLength: number = 30) => {
     return text && text.length > maxLength;
   };
 
-  // Composant pour afficher le texte avec option d'expansion
   const ExpandableText = ({ 
     text, 
     lineId, 
@@ -164,7 +330,6 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           )}
         </button>
         
-        {/* Tooltip au survol pour voir le texte complet */}
         {!isExpanded && (
           <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block z-10">
             <div className="bg-gray-900 text-white text-xs rounded py-1 px-2 max-w-xs break-words whitespace-normal">
@@ -177,7 +342,10 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     );
   };
 
-  // Si l'utilisateur n'a pas la permission de view, on n'affiche que le message d'accès refusé
+  // ============================================
+  // VÉRIFICATIONS DES PERMISSIONS
+  // ============================================
+
   if (permissionsLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -213,6 +381,10 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     );
   }
 
+  // ============================================
+  // CALCULS PRINCIPAUX
+  // ============================================
+
   const getEngagementRate = (line: SubBudgetLine) => {
     return line.notifiedAmount > 0 ? (line.engagedAmount / line.notifiedAmount) * 100 : 0;
   };
@@ -222,19 +394,35 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     return line.notifiedAmount > 0 ? (spentAmount / line.notifiedAmount) * 100 : 0;
   };
 
+  const getProgressRateForLine = (line: SubBudgetLine): number => {
+    const stats = getPaymentStatsForSubLine(line.id);
+    return stats.progressRate;
+  };
+
   const getEngagementColor = (rate: number) => {
     if (rate >= 90) return 'text-red-600';
     if (rate >= 75) return 'text-orange-600';
     return 'text-green-600';
   };
 
-  // 🎯 CALCULS DES TOTAUX AVEC DÉCAISSEMENTS RÉELS
+  const getProgressColor = (rate: number) => {
+    if (rate >= 90) return 'bg-green-600';
+    if (rate >= 50) return 'bg-blue-600';
+    if (rate >= 25) return 'bg-yellow-600';
+    return 'bg-gray-400';
+  };
+
+  // Totaux
   const totalNotified = filteredSubBudgetLinesData.reduce((sum, line) => sum + line.notifiedAmount, 0);
   const totalEngaged = filteredSubBudgetLinesData.reduce((sum, line) => sum + line.engagedAmount, 0);
   const totalAvailable = filteredSubBudgetLinesData.reduce((sum, line) => sum + line.availableAmount, 0);
   const totalSpent = getTotalDisbursedForAllSubBudgetLines();
+  const totalInProgress = getTotalInProgressForAllSubBudgetLines();
+  const totalRemainingToPay = getTotalRemainingToPayForAllSubBudgetLines();
   const overallEngagementRate = totalNotified > 0 ? (totalEngaged / totalNotified) * 100 : 0;
   const overallSpentRate = totalNotified > 0 ? (totalSpent / totalNotified) * 100 : 0;
+  const overallProgressRate = totalNotified > 0 ? ((totalSpent + totalInProgress) / totalNotified) * 100 : 0;
+  const activePartialPayments = getActivePartialPaymentsCount();
 
   const alertLines = filteredSubBudgetLinesData.filter(line => {
     const engagementRate = getEngagementRate(line);
@@ -249,13 +437,16 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     });
   };
 
-  // Calculer les statistiques par ligne budgétaire AVEC DÉCAISSEMENTS RÉELS
+  // Statistiques par ligne budgétaire
   const budgetLineStats = filteredBudgetLines.map(budgetLine => {
     const subLines = filteredSubBudgetLinesData.filter(line => line.budgetLineId === budgetLine.id);
     const notified = subLines.reduce((sum, line) => sum + line.notifiedAmount, 0);
     const engaged = subLines.reduce((sum, line) => sum + line.engagedAmount, 0);
     const available = subLines.reduce((sum, line) => sum + line.availableAmount, 0);
     const spent = subLines.reduce((sum, line) => sum + getSpentAmount(line.id), 0);
+    const inProgress = subLines.reduce((sum, line) => sum + getInProgressAmountForSubLine(line.id), 0);
+    const remaining = subLines.reduce((sum, line) => sum + getRemainingToPayForSubLine(line.id), 0);
+    const progress = subLines.reduce((sum, line) => sum + getPaymentStatsForSubLine(line.id).progressRate, 0) / (subLines.length || 1);
     
     return {
       ...budgetLine,
@@ -263,16 +454,24 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       engaged,
       available,
       spent,
+      inProgress,
+      remaining,
+      progress,
       engagementRate: notified > 0 ? (engaged / notified) * 100 : 0,
-      spentRate: notified > 0 ? (spent / notified) * 100 : 0
+      spentRate: notified > 0 ? (spent / notified) * 100 : 0,
+      progressRate: notified > 0 ? ((spent + inProgress) / notified) * 100 : 0
     };
   }).filter(line => line.notified > 0);
 
-  // Préparer les données avec toutes les métriques calculées (INCLUANT DÉCAISSEMENTS RÉELS)
+  // Données du tableau
   const tableData = filteredSubBudgetLinesData.map(line => {
     const spentAmount = getSpentAmount(line.id);
+    const inProgressAmount = getInProgressAmountForSubLine(line.id);
+    const remainingToPay = getRemainingToPayForSubLine(line.id);
+    const paymentStats = getPaymentStatsForSubLine(line.id);
     const engagementRate = getEngagementRate(line);
     const spentRate = getSpentRate(line);
+    const progressRate = paymentStats.progressRate;
     const budgetLine = budgetLines.find(bl => bl.id === line.budgetLineId);
     const lineGrant = grants.find(g => g.id === line.grantId);
     const lineEngagements = engagements.filter(eng => eng.subBudgetLineId === line.id);
@@ -280,16 +479,21 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     return {
       ...line,
       spentAmount,
+      inProgressAmount,
+      remainingToPay,
+      progressRate,
       engagementRate,
       spentRate,
+      paymentStats,
       budgetLineName: budgetLine?.name || 'Ligne supprimée',
       budgetLineCode: budgetLine?.code || 'N/A',
       grantCurrency: lineGrant?.currency || 'EUR',
-      engagementsCount: lineEngagements.length
+      engagementsCount: lineEngagements.length,
+      hasPartialPayments: paymentStats.partialPaymentsCount > 0
     };
   });
 
-  // Filtrer et trier les données
+  // Filtrage et tri
   const filteredAndSortedData = tableData
     .filter(line => 
       line.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -310,7 +514,6 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       return 0;
     });
 
-  // Pagination
   const totalPages = Math.ceil(filteredAndSortedData.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const paginatedData = filteredAndSortedData.slice(startIndex, startIndex + itemsPerPage);
@@ -332,7 +535,6 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       <ChevronDown className="w-3 h-3 sm:w-4 sm:h-4" />;
   };
 
-  // Gestion de la sélection des lignes budgétaires
   const toggleBudgetLineSelection = (budgetLineId: string) => {
     setSelectedBudgetLines(prev =>
       prev.includes(budgetLineId)
@@ -349,7 +551,10 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     setSelectedBudgetLines([]);
   };
 
-  // Fonction pour exporter le tableau en PDF
+  // ============================================
+  // FONCTIONS D'EXPORT
+  // ============================================
+
   const loadImage = (url: string): Promise<HTMLImageElement> => {
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -359,6 +564,133 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     });
   };
 
+  // Export Excel amélioré avec paiements échelonnés
+  const exportToExcelAdvanced = async (exportAllData: boolean = false) => {
+    if (!canExport) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
+      return;
+    }
+
+    setIsGeneratingExcel(true);
+    
+    try {
+      const dataToExport = exportAllData ? filteredAndSortedData : paginatedData;
+      
+      if (dataToExport.length === 0) {
+        showWarning('Aucune donnée', 'Aucune donnée à exporter');
+        return;
+      }
+
+      const rows: any[] = [];
+
+      // En-tête principal
+      rows.push(['SUIVI BUDGÉTAIRE DÉTAILLÉ AVEC PAIEMENTS ÉCHELONNÉS']);
+      rows.push([]);
+      
+      // Informations de la subvention
+      if (selectedGrant) {
+        rows.push([`Subvention: ${selectedGrant.name}`]);
+        rows.push([`Référence: ${selectedGrant.reference}`]);
+        rows.push([`Devise: ${selectedGrant.currency}`]);
+        rows.push([`Paiements échelonnés actifs: ${activePartialPayments}`]);
+      }
+      rows.push([`Généré le: ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR')}`]);
+      rows.push([]);
+
+      // En-têtes du tableau élargies
+      rows.push([
+        'Sous-ligne budgétaire',
+        'Code',
+        'Ligne budgétaire',
+        'Budget notifié',
+        'Montant engagé',
+        'Décaissé',
+        'En cours',
+        'Reste à payer',
+        'Solde disponible',
+        "Taux d'engagement",
+        'Taux de décaissement',
+        'Progression',
+        'Paiements échelonnés'
+      ]);
+
+      rows.push(['---', '---', '---', '---', '---', '---', '---', '---', '---', '---', '---', '---', '---']);
+
+      // Données
+      dataToExport.forEach((line) => {
+        rows.push([
+          line.name,
+          line.code,
+          line.budgetLineName,
+          line.notifiedAmount,
+          line.engagedAmount,
+          line.spentAmount,
+          line.inProgressAmount,
+          line.remainingToPay,
+          line.availableAmount,
+          `${line.engagementRate.toFixed(2)}%`,
+          `${line.spentRate.toFixed(2)}%`,
+          `${line.progressRate.toFixed(2)}%`,
+          line.paymentStats.partialPaymentsCount > 0 ? `${line.paymentStats.partialPaymentsCount} paiement(s) partiel(s)` : 'Aucun'
+        ]);
+      });
+
+      // Ligne de séparation
+      rows.push(['---', '---', '---', '---', '---', '---', '---', '---', '---', '---', '---', '---', '---']);
+
+      // Totaux
+      rows.push([
+        'TOTAUX',
+        '',
+        '',
+        totalNotified,
+        totalEngaged,
+        totalSpent,
+        totalInProgress,
+        totalRemainingToPay,
+        totalAvailable,
+        `${overallEngagementRate.toFixed(2)}%`,
+        `${overallSpentRate.toFixed(2)}%`,
+        `${overallProgressRate.toFixed(2)}%`,
+        `${activePartialPayments} actif(s)`
+      ]);
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+
+      ws['!cols'] = [
+        { wch: 35 },
+        { wch: 15 },
+        { wch: 30 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 20 }
+      ];
+
+      const sheetName = exportAllData ? 'Suivi Budgétaire Complet' : 'Suivi Budgétaire Page';
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+      const suffix = exportAllData ? 'complet' : 'page';
+      const fileName = `suivi-budgetaire-${suffix}-${selectedGrant?.reference || 'global'}-${new Date().toISOString().split('T')[0]}.xlsx`;
+      
+      XLSX.writeFile(wb, fileName);
+      showSuccess('Export réussi', `Le fichier Excel a été généré avec succès`);
+    } catch (error) {
+      console.error('Erreur lors de l\'export Excel:', error);
+      showError('Erreur', 'Impossible de générer le fichier Excel');
+    } finally {
+      setIsGeneratingExcel(false);
+    }
+  };
+
+  // Export PDF amélioré
   const exportTableToPDF = async (exportAllData: boolean = false) => {
     if (!canExport) {
       showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
@@ -373,7 +705,6 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       const pageHeight = pdf.internal.pageSize.getHeight();
       const margin = 15;
       
-      // Charger le logo
       let logo: HTMLImageElement | null = null;
       try {
         logo = await loadImage('/budgetflow/logo.png');
@@ -381,26 +712,27 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         console.warn('Logo non chargé, continuation sans logo');
       }
 
-      // Ajuster la hauteur de l'en-tête en fonction de la présence du logo
-      const headerHeight = logo ? 60 : 50;
-      
       const dataToExport = exportAllData ? filteredAndSortedData : paginatedData;
       
       if (dataToExport.length === 0) {
-        alert('Aucune donnée à exporter');
+        showWarning('Aucune donnée', 'Aucune donnée à exporter');
         return;
       }
 
+      // Configuration des colonnes élargie
       const columnConfig = [
-        { key: 'name', label: 'Sous-ligne', width: 60, align: 'left' },
-        { key: 'code', label: 'Code', width: 20, align: 'center' },
-        { key: 'budgetLineName', label: 'Ligne budgétaire', width: 50, align: 'left' },
-        { key: 'notifiedAmount', label: 'Budget notifié', width: 30, align: 'right' },
-        { key: 'engagedAmount', label: 'Engagé', width: 30, align: 'right' },
-        { key: 'spentAmount', label: 'Décaissé', width: 30, align: 'right' },
-        { key: 'availableAmount', label: 'Solde', width: 30, align: 'right' },
-        { key: 'engagementRate', label: 'Taux Eng.', width: 22, align: 'center' },
-        { key: 'spentRate', label: 'Taux Dép.', width: 22, align: 'center' }
+        { key: 'name', label: 'Sous-ligne', width: 45, align: 'left' },
+        { key: 'code', label: 'Code', width: 18, align: 'center' },
+        { key: 'budgetLineName', label: 'Ligne budgétaire', width: 40, align: 'left' },
+        { key: 'notifiedAmount', label: 'Notifié', width: 22, align: 'right' },
+        { key: 'engagedAmount', label: 'Engagé', width: 22, align: 'right' },
+        { key: 'spentAmount', label: 'Décaissé', width: 22, align: 'right' },
+        { key: 'inProgressAmount', label: 'En cours', width: 22, align: 'right' },
+        { key: 'remainingToPay', label: 'Reste', width: 22, align: 'right' },
+        { key: 'availableAmount', label: 'Solde', width: 22, align: 'right' },
+        { key: 'engagementRate', label: 'Taux Eng.', width: 18, align: 'center' },
+        { key: 'spentRate', label: 'Taux Déc.', width: 18, align: 'center' },
+        { key: 'progressRate', label: 'Progression', width: 18, align: 'center' }
       ];
 
       const totalWidth = columnConfig.reduce((sum, col) => sum + col.width, 0);
@@ -445,64 +777,51 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         return decimalPart === '00' ? integerPart : `${integerPart}.${decimalPart}`;
       };
 
-      let currentY = margin + headerHeight;
+      let currentY = margin + 60;
       let currentPageNum = 0;
 
       const drawHeader = (isFirstPage: boolean = true) => {
         let yPosition = margin;
 
-        // Logo sur la première page uniquement
         if (isFirstPage && logo) {
           const logoWidth = 25;
           const logoHeight = (logo.height * logoWidth) / logo.width;
-          
-          // Ajouter le logo en haut à gauche
-          pdf.addImage(
-            logo,
-            'PNG',
-            margin,
-            yPosition,
-            logoWidth,
-            logoHeight
-          );
-          
-          // Ajuster la position Y pour le texte après le logo
+          pdf.addImage(logo, 'PNG', margin, yPosition, logoWidth, logoHeight);
           yPosition += logoHeight + 5;
         }
 
-        // Titre principal
         pdf.setFontSize(16);
         pdf.setFont('helvetica', 'bold');
         pdf.text('SUIVI BUDGÉTAIRE DÉTAILLÉ', margin, yPosition);
         
         pdf.setFontSize(12);
         pdf.setFont('helvetica', 'normal');
-        pdf.text('Détail par Sous-ligne Budgétaire', margin, yPosition + 8);
+        pdf.text('Détail par Sous-ligne Budgétaire avec Paiements Échelonnés', margin, yPosition + 8);
         
         if (selectedGrant) {
           pdf.text(`Subvention: ${selectedGrant.name}`, margin, yPosition + 16);
           pdf.text(`Référence: ${selectedGrant.reference}`, margin, yPosition + 22);
           pdf.text(`Devise: ${selectedGrant.currency}`, margin, yPosition + 28);
+          pdf.text(`Paiements échelonnés actifs: ${activePartialPayments}`, margin, yPosition + 34);
         }
 
-        // Informations de génération alignées à droite
         const dateText = `Généré le ${new Date().toLocaleDateString('fr-FR')}`;
         const timeText = `à ${new Date().toLocaleTimeString('fr-FR')}`;
         
         pdf.setFontSize(9);
         pdf.text(dateText, pageWidth - margin - pdf.getTextWidth(dateText), margin + 8);
         pdf.text(timeText, pageWidth - margin - pdf.getTextWidth(timeText), margin + 14);
+        
+        return yPosition + 40;
       };
 
-      // Appel initial de l'en-tête avec logo
-      drawHeader(true);
+      currentY = drawHeader(true);
 
-      // En-têtes du tableau
       let xPosition = margin;
       pdf.setFillColor(59, 130, 246);
       pdf.rect(xPosition, currentY, pageWidth - (margin * 2), 10, 'F');
       
-      pdf.setFontSize(9);
+      pdf.setFontSize(8);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(255, 255, 255);
       
@@ -524,7 +843,6 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
 
       currentY += 16;
 
-      // Données
       pdf.setFont('helvetica', 'normal');
       pdf.setTextColor(0, 0, 0);
 
@@ -534,17 +852,15 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           currentPageNum++;
           currentY = margin + 40;
           
-          // En-tête simplifié pour les pages suivantes
           pdf.setFontSize(12);
           pdf.setFont('helvetica', 'bold');
           pdf.text('SUIVI BUDGÉTAIRE DÉTAILLÉ (suite)', margin, margin + 10);
           
-          // Réinitialiser les en-têtes du tableau
           xPosition = margin;
           pdf.setFillColor(59, 130, 246);
           pdf.rect(xPosition, currentY, pageWidth - (margin * 2), 10, 'F');
           
-          pdf.setFontSize(9);
+          pdf.setFontSize(8);
           pdf.setFont('helvetica', 'bold');
           pdf.setTextColor(255, 255, 255);
           
@@ -569,13 +885,12 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           pdf.setTextColor(0, 0, 0);
         }
 
-        // Fond alterné
         if (rowIndex % 2 === 0) {
           pdf.setFillColor(249, 250, 251);
           pdf.rect(margin, currentY - 4, pageWidth - (margin * 2), 12, 'F');
         }
 
-        pdf.setFontSize(8);
+        pdf.setFontSize(7);
         xPosition = margin;
         let maxLinesInRow = 1;
 
@@ -583,7 +898,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           let value: any = line[col.key as keyof typeof line];
           let displayValue = '';
 
-          if (col.key === 'engagementRate' || col.key === 'spentRate') {
+          if (col.key === 'engagementRate' || col.key === 'spentRate' || col.key === 'progressRate') {
             displayValue = typeof value === 'number' ? `${value.toFixed(1)}%` : '0%';
           } else if (col.key.includes('Amount')) {
             displayValue = typeof value === 'number' ? formatNumberWithSpaces(value) : '0';
@@ -612,14 +927,18 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
               x = xPosition + 2;
             }
 
-            // Couleurs conditionnelles
+            // Colorisation conditionnelle
             if (col.key === 'availableAmount' && value < 0) {
               pdf.setTextColor(220, 38, 38);
-            } else if (col.key === 'engagementRate' || col.key === 'spentRate') {
+            } else if (col.key === 'inProgressAmount' && value > 0) {
+              pdf.setTextColor(147, 51, 234);
+            } else if (col.key === 'remainingToPay' && value > 0) {
+              pdf.setTextColor(234, 88, 12);
+            } else if (col.key === 'engagementRate' || col.key === 'spentRate' || col.key === 'progressRate') {
               if (value > 90) pdf.setTextColor(220, 38, 38);
               else if (value > 75) pdf.setTextColor(234, 88, 12);
-              else if (col.key === 'engagementRate') pdf.setTextColor(5, 150, 105);
-              else pdf.setTextColor(59, 130, 246);
+              else if (col.key === 'progressRate') pdf.setTextColor(147, 51, 234);
+              else pdf.setTextColor(5, 150, 105);
             }
 
             pdf.text(displayValue, x, currentY + 2);
@@ -632,7 +951,52 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         currentY += 5 + (maxLinesInRow * 3.5);
       });
 
-      // Pied de page sur toutes les pages
+      // Ajouter une ligne récapitulative
+      if (currentY + 10 < pageHeight - 30) {
+        pdf.setFillColor(243, 244, 246);
+        pdf.rect(margin, currentY, pageWidth - (margin * 2), 9, 'F');
+        pdf.setFontSize(7);
+        pdf.setFont('helvetica', 'bold');
+        
+        xPosition = margin;
+        const summaryLabels = ['TOTAUX', '', '', 'Notifié', 'Engagé', 'Décaissé', 'En cours', 'Reste', 'Solde', 'Taux Eng.', 'Taux Déc.', 'Progression'];
+        const summaryValues = [
+          '', '', '', 
+          formatNumberWithSpaces(totalNotified),
+          formatNumberWithSpaces(totalEngaged),
+          formatNumberWithSpaces(totalSpent),
+          formatNumberWithSpaces(totalInProgress),
+          formatNumberWithSpaces(totalRemainingToPay),
+          formatNumberWithSpaces(totalAvailable),
+          `${overallEngagementRate.toFixed(1)}%`,
+          `${overallSpentRate.toFixed(1)}%`,
+          `${overallProgressRate.toFixed(1)}%`
+        ];
+        
+        columnConfig.forEach((col, idx) => {
+          const text = idx < summaryLabels.length ? summaryLabels[idx] : '';
+          const value = idx < summaryValues.length ? summaryValues[idx] : '';
+          const displayText = text || value;
+          
+          let x = xPosition;
+          if (col.align === 'center') {
+            const textWidth = pdf.getTextWidth(displayText);
+            x = xPosition + (col.width - textWidth) / 2;
+          } else if (col.align === 'right') {
+            const textWidth = pdf.getTextWidth(displayText);
+            x = xPosition + col.width - textWidth - 2;
+          } else {
+            x = xPosition + 2;
+          }
+          
+          pdf.text(displayText, Math.max(x, xPosition + 2), currentY + 7);
+          xPosition += col.width;
+        });
+        
+        currentY += 10;
+      }
+
+      // Numéros de page
       const totalPages = pdf.getNumberOfPages();
       for (let i = 1; i <= totalPages; i++) {
         pdf.setPage(i);
@@ -641,7 +1005,6 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         pdf.setFont('helvetica', 'normal');
         pdf.setTextColor(100, 100, 100);
         
-        // Numéro de page
         pdf.text(
           `Page ${i} sur ${totalPages}`,
           pageWidth / 2,
@@ -649,17 +1012,16 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           { align: 'center' }
         );
         
-        // Copyright
         pdf.text(
-          `© ${new Date().getFullYear()} BudgetFlow - Document généré automatiquement`,
+          `© ${new Date().getFullYear()} BudgetBase - Document généré automatiquement`,
           pageWidth / 2,
           pageHeight - 5,
           { align: 'center' }
         );
       }
 
-      // Télécharger le PDF
-      const fileName = `suivi-budgetaire-complet-${selectedGrant?.reference || 'global'}-${new Date().toISOString().split('T')[0]}.pdf`;
+      const suffix = exportAllData ? 'complet' : 'page';
+      const fileName = `suivi-budgetaire-${suffix}-${selectedGrant?.reference || 'global'}-${new Date().toISOString().split('T')[0]}.pdf`;
       pdf.save(fileName);
       
       showSuccess('Export réussi', 'Le fichier PDF a été généré avec succès');
@@ -672,9 +1034,17 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     }
   };
 
-  // Composant pour les cartes statistiques responsive
-  const StatCard = ({ title, value, subtitle, icon: Icon, color }: any) => (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-3 sm:p-4">
+  // ============================================
+  // COMPOSANT STAT CARD
+  // ============================================
+
+  const StatCard = ({ title, value, subtitle, icon: Icon, color, badge }: any) => (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-3 sm:p-4 relative">
+      {badge && (
+        <div className="absolute -top-1 -right-1 bg-purple-600 text-white text-xs px-2 py-0.5 rounded-full">
+          {badge}
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div className="flex-1 min-w-0">
           <p className="text-xs sm:text-sm font-medium text-gray-600 truncate">{title}</p>
@@ -688,14 +1058,24 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     </div>
   );
 
+  // ============================================
+  // RENDU
+  // ============================================
+
   return (
     <div className="space-y-4 sm:space-y-6 p-3 sm:p-4">
-      {/* Header Mobile avec menu burger */}
+      {/* Header Mobile */}
       <div className="lg:hidden">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-xl font-bold text-gray-900">Suivi Budgétaire</h2>
             <p className="text-sm text-gray-600 mt-1">Suivi en temps réel</p>
+            {activePartialPayments > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 mt-1">
+                <DollarSign className="w-3 h-3 mr-1" />
+                {activePartialPayments} paiement(s) échelonné(s)
+              </span>
+            )}
           </div>
           <button
             onClick={() => setShowMobileMenu(!showMobileMenu)}
@@ -705,7 +1085,6 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           </button>
         </div>
 
-        {/* Menu mobile */}
         {showMobileMenu && (
           <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-4 mb-4">
             <div className="space-y-3">
@@ -728,17 +1107,35 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                     disabled={isGeneratingPDF}
                     className="bg-blue-600 text-white px-3 py-2 rounded-lg font-medium text-xs flex items-center justify-center space-x-1 disabled:opacity-50"
                   >
-                    <Download className="w-3 h-3" />
+                    <FileText className="w-3 h-3" />
                     <span>PDF Page</span>
                   </button>
                   
                   <button
                     onClick={() => exportTableToPDF(true)}
                     disabled={isGeneratingPDF}
+                    className="bg-blue-800 text-white px-3 py-2 rounded-lg font-medium text-xs flex items-center justify-center space-x-1 disabled:opacity-50"
+                  >
+                    <FileText className="w-3 h-3" />
+                    <span>PDF Complet</span>
+                  </button>
+                  
+                  <button
+                    onClick={() => exportToExcelAdvanced(false)}
+                    disabled={isGeneratingExcel}
                     className="bg-green-600 text-white px-3 py-2 rounded-lg font-medium text-xs flex items-center justify-center space-x-1 disabled:opacity-50"
                   >
-                    <Download className="w-3 h-3" />
-                    <span>PDF Complet</span>
+                    <FileSpreadsheet className="w-3 h-3" />
+                    <span>Excel Page</span>
+                  </button>
+                  
+                  <button
+                    onClick={() => exportToExcelAdvanced(true)}
+                    disabled={isGeneratingExcel}
+                    className="bg-green-800 text-white px-3 py-2 rounded-lg font-medium text-xs flex items-center justify-center space-x-1 disabled:opacity-50"
+                  >
+                    <FileSpreadsheet className="w-3 h-3" />
+                    <span>Excel Complet</span>
                   </button>
                 </div>
               )}
@@ -757,8 +1154,14 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
               Filtrage actif: {selectedBudgetLines.length} ligne(s) budgétaire(s) sélectionnée(s)
             </p>
           )}
+          {activePartialPayments > 0 && (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 mt-1">
+              <DollarSign className="w-3 h-3 mr-1" />
+              {activePartialPayments} paiement(s) échelonné(s) en cours
+            </span>
+          )}
         </div>
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center space-x-2 flex-wrap gap-2">
           <button
             onClick={() => setShowFilterModal(true)}
             className={`px-4 py-2 rounded-xl font-medium hover:shadow-lg transition-all duration-200 flex items-center space-x-2 ${
@@ -772,31 +1175,53 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           </button>
 
           {canExport && (
-            <div className="flex space-x-2">
-              <button
-                onClick={() => exportTableToPDF(false)}
-                disabled={isGeneratingPDF}
-                className="bg-blue-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-blue-700 transition-all duration-200 flex items-center space-x-2 disabled:opacity-50 text-sm"
-              >
-                <Download className="w-4 h-4" />
-                <span>{isGeneratingPDF ? 'Génération...' : 'PDF Page'}</span>
-              </button>
+            <>
+              <div className="flex space-x-1">
+                <button
+                  onClick={() => exportTableToPDF(false)}
+                  disabled={isGeneratingPDF}
+                  className="bg-blue-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-blue-700 transition-all duration-200 flex items-center space-x-1 disabled:opacity-50 text-xs"
+                >
+                  <FileText className="w-3 h-3" />
+                  <span>{isGeneratingPDF ? '...' : 'PDF Page'}</span>
+                </button>
+                
+                <button
+                  onClick={() => exportTableToPDF(true)}
+                  disabled={isGeneratingPDF}
+                  className="bg-blue-800 text-white px-3 py-2 rounded-lg font-medium hover:bg-blue-900 transition-all duration-200 flex items-center space-x-1 disabled:opacity-50 text-xs"
+                >
+                  <FileText className="w-3 h-3" />
+                  <span>{isGeneratingPDF ? '...' : 'PDF Complet'}</span>
+                </button>
+              </div>
               
-              <button
-                onClick={() => exportTableToPDF(true)}
-                disabled={isGeneratingPDF}
-                className="bg-green-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-green-700 transition-all duration-200 flex items-center space-x-2 disabled:opacity-50 text-sm"
-              >
-                <Download className="w-4 h-4" />
-                <span>{isGeneratingPDF ? 'Génération...' : 'PDF Complet'}</span>
-              </button>
-            </div>
+              <div className="flex space-x-1">
+                <button
+                  onClick={() => exportToExcelAdvanced(false)}
+                  disabled={isGeneratingExcel}
+                  className="bg-green-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-green-700 transition-all duration-200 flex items-center space-x-1 disabled:opacity-50 text-xs"
+                >
+                  <FileSpreadsheet className="w-3 h-3" />
+                  <span>{isGeneratingExcel ? '...' : 'Excel Page'}</span>
+                </button>
+                
+                <button
+                  onClick={() => exportToExcelAdvanced(true)}
+                  disabled={isGeneratingExcel}
+                  className="bg-green-800 text-white px-3 py-2 rounded-lg font-medium hover:bg-green-900 transition-all duration-200 flex items-center space-x-1 disabled:opacity-50 text-xs"
+                >
+                  <FileSpreadsheet className="w-3 h-3" />
+                  <span>{isGeneratingExcel ? '...' : 'Excel Complet'}</span>
+                </button>
+              </div>
+            </>
           )}
         </div>
       </div>
 
-      {/* Summary Cards - Version ultra-responsive */}
-      <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-2 sm:gap-3">
+      {/* Summary Cards avec paiements échelonnés */}
+      <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
         <StatCard
           title="Budget Notifié"
           value={selectedGrant ? formatCurrency(totalNotified, selectedGrant.currency) : totalNotified.toLocaleString('fr-FR')}
@@ -810,28 +1235,114 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           color="text-green-600"
         />
         <StatCard
-          title="Montant Décaissé"
+          title="Décaissé (échelonné + direct)"
           value={selectedGrant ? formatCurrency(totalSpent, selectedGrant.currency) : totalSpent.toLocaleString('fr-FR')}
           subtitle={`Taux: ${overallSpentRate.toFixed(2)}%`}
           icon={FileText}
+          color="text-blue-600"
+        />
+        <StatCard
+          title="En Cours de Paiement"
+          value={selectedGrant ? formatCurrency(totalInProgress, selectedGrant.currency) : totalInProgress.toLocaleString('fr-FR')}
+          subtitle={`${activePartialPayments} paiement(s) échelonné(s)`}
+          icon={DollarSign}
           color="text-purple-600"
+          badge={activePartialPayments > 0 ? activePartialPayments : undefined}
+        />
+        <StatCard
+          title="Reste à Payer"
+          value={selectedGrant ? formatCurrency(totalRemainingToPay, selectedGrant.currency) : totalRemainingToPay.toLocaleString('fr-FR')}
+          icon={Clock}
+          color="text-orange-600"
         />
         <StatCard
           title="Solde Disponible"
           value={selectedGrant ? formatCurrency(totalAvailable, selectedGrant.currency) : totalAvailable.toLocaleString('fr-FR')}
           icon={TrendingUp}
-          color="text-orange-600"
+          color="text-green-600"
         />
         <StatCard
-          title="Taux d'Engagement"
-          value={`${overallEngagementRate.toFixed(2)}%`}
-          subtitle={`Décaissé: ${overallSpentRate.toFixed(2)}%`}
+          title="Progression Globale"
+          value={`${overallProgressRate.toFixed(2)}%`}
+          subtitle={`Engagé: ${overallEngagementRate.toFixed(2)}%`}
           icon={AlertTriangle}
-          color="text-red-600"
+          color="text-purple-600"
         />
       </div>
 
-      {/* Tableau avec version mobile simplifiée */}
+      {/* Section Paiements Échelonnés */}
+      {activePartialPayments > 0 && (
+        <div className="bg-purple-50 rounded-xl border border-purple-200 p-4">
+          <h3 className="text-sm font-semibold text-purple-900 mb-3 flex items-center">
+            <DollarSign className="w-4 h-4 mr-2 text-purple-700" />
+            Paiements Échelonnés Actifs
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {payments
+              .filter(p => p.partialPayments && p.partialPayments.length > 0 && p.status !== 'paid')
+              .slice(0, 6)
+              .map(payment => {
+                const totalPaid = payment.partialPayments?.reduce((sum, pp) => sum + pp.amount, 0) || 0;
+                const progress = payment.amount > 0 ? (totalPaid / payment.amount) * 100 : 0;
+                const remaining = payment.amount - totalPaid;
+                const lastPayment = payment.partialPayments?.[payment.partialPayments.length - 1];
+                
+                return (
+                  <div key={payment.id} className="bg-white rounded-lg p-3 border border-purple-200 shadow-sm">
+                    <div className="flex justify-between items-start mb-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-gray-900 text-sm truncate">
+                          {payment.paymentNumber}
+                        </p>
+                        <p className="text-xs text-gray-600 truncate">
+                          {payment.supplier}
+                        </p>
+                      </div>
+                      <span className="text-xs font-medium text-purple-600">
+                        {payment.partialPayments?.length || 0} versements
+                      </span>
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-gray-600">Progression</span>
+                        <span className="font-medium text-purple-600">{progress.toFixed(0)}%</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div 
+                          className="h-2 rounded-full bg-purple-600 transition-all duration-300"
+                          style={{ width: `${Math.min(progress, 100)}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-gray-500">
+                          Payé: {formatCurrency(totalPaid, selectedGrant?.currency || 'EUR')}
+                        </span>
+                        <span className="text-orange-600 font-medium">
+                          Reste: {formatCurrency(remaining, selectedGrant?.currency || 'EUR')}
+                        </span>
+                      </div>
+                      {lastPayment && (
+                        <div className="text-xs text-gray-400 border-t border-gray-100 pt-1 mt-1">
+                          Dernier versement: {new Date(lastPayment.date).toLocaleDateString('fr-FR')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+          {activePartialPayments > 6 && (
+            <div className="text-center mt-3">
+              <span className="text-xs text-purple-600">
+                + {activePartialPayments - 6} autre(s) paiement(s) échelonné(s)
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tableau */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-3 sm:p-4 border-b border-gray-200">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
@@ -882,10 +1393,10 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           </div>
         ) : (
           <>
-            {/* Version mobile simplifiée */}
+            {/* Version mobile */}
             {isMobileView ? (
               <div className="p-3 space-y-3">
-                {paginatedData.map((line, index) => (
+                {paginatedData.map((line) => (
                   <div key={line.id} className="bg-gray-50 rounded-lg p-3 border">
                     <div className="flex justify-between items-start mb-2">
                       <div className="flex-1">
@@ -910,13 +1421,11 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                           />
                         </p>
                       </div>
-                      <span className={`text-xs px-2 py-1 rounded-full ${
-                        line.engagementRate > 90 ? 'bg-red-100 text-red-800' :
-                        line.engagementRate > 75 ? 'bg-orange-100 text-orange-800' :
-                        'bg-green-100 text-green-800'
-                      }`}>
-                        {line.engagementRate.toFixed(2)}%
-                      </span>
+                      {line.hasPartialPayments && (
+                        <span className="text-xs px-2 py-1 bg-purple-100 text-purple-700 rounded-full">
+                          Échelonné
+                        </span>
+                      )}
                     </div>
                     
                     <div className="grid grid-cols-2 gap-2 text-xs">
@@ -929,8 +1438,16 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                         <p className="font-medium">{formatCurrency(line.engagedAmount, line.grantCurrency)}</p>
                       </div>
                       <div>
-                        <span className="text-gray-600">Décaissé RÉEL:</span>
+                        <span className="text-gray-600">Décaissé:</span>
                         <p className="font-medium text-blue-600">{formatCurrency(line.spentAmount, line.grantCurrency)}</p>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">En cours:</span>
+                        <p className="font-medium text-purple-600">{formatCurrency(line.inProgressAmount, line.grantCurrency)}</p>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Reste:</span>
+                        <p className="font-medium text-orange-600">{formatCurrency(line.remainingToPay, line.grantCurrency)}</p>
                       </div>
                       <div>
                         <span className="text-gray-600">Solde:</span>
@@ -940,8 +1457,26 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                       </div>
                     </div>
                     
+                    {/* Barre de progression */}
+                    <div className="mt-2">
+                      <div className="flex justify-between text-xs text-gray-600">
+                        <span>Progression</span>
+                        <span className="font-medium text-purple-600">{line.progressRate.toFixed(1)}%</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
+                        <div 
+                          className={`h-2 rounded-full transition-all duration-300 ${getProgressColor(line.progressRate)}`}
+                          style={{ width: `${Math.min(line.progressRate, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                    
                     <div className="flex justify-between items-center mt-2">
-                      <span className="text-xs text-gray-500">Taux décaissé: {line.spentRate.toFixed(2)}%</span>
+                      <span className="text-xs text-gray-500">
+                        {line.paymentStats.partialPaymentsCount > 0 
+                          ? `${line.paymentStats.partialPaymentsCount} paiement(s) partiel(s)` 
+                          : 'Paiement complet'}
+                      </span>
                       {canViewDetails && (
                         <button
                           onClick={() => onViewEngagements(line.id)}
@@ -955,68 +1490,86 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                 ))}
               </div>
             ) : (
-              /* Version desktop complète */
+              /* Version desktop avec colonnes élargies */
               <div className="overflow-x-auto">
-                <table ref={tableRef} className="w-full">
+                <table ref={tableRef} className="w-full min-w-[1400px]">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('name')}>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('name')}>
                         <div className="flex items-center space-x-1">
                           <span>Sous-ligne</span>
                           <SortIcon field="name" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('code')}>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('code')}>
                         <div className="flex items-center space-x-1">
                           <span>Code</span>
                           <SortIcon field="code" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ligne budgétaire</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('notifiedAmount')}>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Ligne budgétaire</th>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('notifiedAmount')}>
                         <div className="flex items-center justify-end space-x-1">
                           <span>Notifié</span>
                           <SortIcon field="notifiedAmount" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('engagedAmount')}>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('engagedAmount')}>
                         <div className="flex items-center justify-end space-x-1">
                           <span>Engagé</span>
                           <SortIcon field="engagedAmount" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('spentAmount')}>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('spentAmount')}>
                         <div className="flex items-center justify-end space-x-1">
-                          <span>Décaissé RÉEL</span>
+                          <span>Décaissé</span>
                           <SortIcon field="spentAmount" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('availableAmount')}>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('inProgressAmount')}>
+                        <div className="flex items-center justify-end space-x-1">
+                          <span className="text-purple-600">En cours</span>
+                          <SortIcon field="inProgressAmount" />
+                        </div>
+                      </th>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('remainingToPay')}>
+                        <div className="flex items-center justify-end space-x-1">
+                          <span className="text-orange-600">Reste</span>
+                          <SortIcon field="remainingToPay" />
+                        </div>
+                      </th>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('availableAmount')}>
                         <div className="flex items-center justify-end space-x-1">
                           <span>Solde</span>
                           <SortIcon field="availableAmount" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('engagementRate')}>
+                      <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('engagementRate')}>
                         <div className="flex items-center justify-center space-x-1">
                           <span>Taux Eng.</span>
                           <SortIcon field="engagementRate" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => handleSort('spentRate')}>
+                      <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('spentRate')}>
                         <div className="flex items-center justify-center space-x-1">
                           <span>Taux Déc.</span>
                           <SortIcon field="spentRate" />
                         </div>
                       </th>
+                      <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('progressRate')}>
+                        <div className="flex items-center justify-center space-x-1">
+                          <span className="text-purple-600">Progression</span>
+                          <SortIcon field="progressRate" />
+                        </div>
+                      </th>
                       {canViewDetails && (
-                        <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Actions</th>
                       )}
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
                     {paginatedData.map(line => (
-                      <tr key={line.id} className="hover:bg-gray-50">
+                      <tr key={line.id} className={`hover:bg-gray-50 ${line.hasPartialPayments ? 'bg-purple-50/30' : ''}`}>
                         <td className="px-3 py-2 max-w-[120px]">
                           <div className="text-sm font-medium text-gray-900">
                             <ExpandableText 
@@ -1026,6 +1579,12 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                               maxLength={30}
                               textClassName="font-medium text-gray-900"
                             />
+                            {line.hasPartialPayments && (
+                              <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                                <DollarSign className="w-2.5 h-2.5 mr-0.5" />
+                                Échelonné
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="px-3 py-2">
@@ -1042,27 +1601,52 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                             />
                           </div>
                         </td>
-                        <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">{formatCurrency(line.notifiedAmount, line.grantCurrency)}</td>
-                        <td className="px-3 py-2 text-right text-sm text-gray-900">{formatCurrency(line.engagedAmount, line.grantCurrency)}</td>
-                        <td className="px-3 py-2 text-right text-sm text-blue-600 font-medium">{formatCurrency(line.spentAmount, line.grantCurrency)}</td>
-                        <td className={`px-3 py-2 text-right text-sm font-medium ${line.availableAmount < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                        <td className="px-3 py-2 text-right text-sm font-medium text-gray-900 whitespace-nowrap">
+                          {formatCurrency(line.notifiedAmount, line.grantCurrency)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm text-gray-900 whitespace-nowrap">
+                          {formatCurrency(line.engagedAmount, line.grantCurrency)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm text-blue-600 font-medium whitespace-nowrap">
+                          {formatCurrency(line.spentAmount, line.grantCurrency)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm text-purple-600 font-medium whitespace-nowrap">
+                          {line.inProgressAmount > 0 ? formatCurrency(line.inProgressAmount, line.grantCurrency) : '-'}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm text-orange-600 font-medium whitespace-nowrap">
+                          {line.remainingToPay > 0 ? formatCurrency(line.remainingToPay, line.grantCurrency) : '✓'}
+                        </td>
+                        <td className={`px-3 py-2 text-right text-sm font-medium whitespace-nowrap ${line.availableAmount < 0 ? 'text-red-600' : 'text-green-600'}`}>
                           {formatCurrency(line.availableAmount, line.grantCurrency)}
                         </td>
-                        <td className="px-3 py-2 text-center">
+                        <td className="px-3 py-2 text-center whitespace-nowrap">
                           <span className={`text-xs font-medium ${getEngagementColor(line.engagementRate)}`}>
                             {line.engagementRate.toFixed(2)}%
                           </span>
                         </td>
-                        <td className="px-3 py-2 text-center">
+                        <td className="px-3 py-2 text-center whitespace-nowrap">
                           <span className={`text-xs font-medium ${getEngagementColor(line.spentRate)}`}>
                             {line.spentRate.toFixed(2)}%
                           </span>
                         </td>
+                        <td className="px-3 py-2 text-center whitespace-nowrap">
+                          <div className="flex items-center justify-center space-x-1">
+                            <div className="w-12 bg-gray-200 rounded-full h-1.5">
+                              <div 
+                                className={`h-1.5 rounded-full transition-all duration-300 ${getProgressColor(line.progressRate)}`}
+                                style={{ width: `${Math.min(line.progressRate, 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-xs font-medium text-purple-600">
+                              {line.progressRate.toFixed(1)}%
+                            </span>
+                          </div>
+                        </td>
                         {canViewDetails && (
-                          <td className="px-3 py-2 text-center">
+                          <td className="px-3 py-2 text-center whitespace-nowrap">
                             <button
                               onClick={() => onViewEngagements(line.id)}
-                              className="inline-flex items-center px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded-full hover:bg-blue-200"
+                              className="inline-flex items-center px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded-full hover:bg-blue-200 transition-colors"
                             >
                               <Eye className="w-3 h-3 mr-1" />
                               Détails
@@ -1076,7 +1660,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
               </div>
             )}
 
-            {/* Pagination responsive */}
+            {/* Pagination */}
             {totalPages > 1 && (
               <div className="p-3 sm:p-4 border-t border-gray-200">
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -1107,7 +1691,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                             className={`px-3 py-1 rounded text-xs ${
                               currentPage === pageNum
                                 ? 'bg-blue-600 text-white'
-                                : 'border border-gray-300'
+                                : 'border border-gray-300 hover:bg-gray-50'
                             }`}
                           >
                             {pageNum}
@@ -1131,10 +1715,9 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         )}
       </div>
 
-      {/* Contenu principal en colonne sur mobile */}
+      {/* Contenu principal */}
       <div className="flex flex-col lg:grid lg:grid-cols-2 gap-4 sm:gap-6">
-        
-        {/* Suivi par Ligne Budgétaire */}
+        {/* Suivi par Ligne Budgétaire avec progression */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-3 sm:p-4">
           <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3">Suivi par Ligne Budgétaire</h3>
           <div className="space-y-3 max-h-64 overflow-y-auto">
@@ -1150,6 +1733,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                   <div className="text-right flex-shrink-0 ml-2">
                     <span className="text-xs text-gray-600 block">Engagé: {budgetLine.engagementRate.toFixed(2)}%</span>
                     <span className="text-xs text-gray-500">Décaissé: {budgetLine.spentRate.toFixed(2)}%</span>
+                    <span className="text-xs text-purple-600 block">Progression: {budgetLine.progressRate.toFixed(2)}%</span>
                   </div>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-1.5">
@@ -1161,6 +1745,19 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                     }`}
                     style={{ width: `${Math.min(budgetLine.engagementRate, 100)}%` }}
                   />
+                </div>
+                {budgetLine.inProgress > 0 && (
+                  <div className="w-full bg-gray-200 rounded-full h-1.5">
+                    <div 
+                      className="h-1.5 rounded-full bg-purple-500 transition-all duration-300"
+                      style={{ width: `${Math.min((budgetLine.inProgress / budgetLine.notified) * 100, 100)}%` }}
+                    />
+                  </div>
+                )}
+                <div className="flex justify-between text-xs text-gray-500">
+                  <span>Décaissé: {formatCurrency(budgetLine.spent, selectedGrant?.currency || 'EUR')}</span>
+                  <span className="text-purple-600">En cours: {formatCurrency(budgetLine.inProgress, selectedGrant?.currency || 'EUR')}</span>
+                  <span className="text-orange-600">Reste: {formatCurrency(budgetLine.remaining, selectedGrant?.currency || 'EUR')}</span>
                 </div>
               </div>
             ))}
@@ -1177,6 +1774,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
             {alertLines.map(line => {
               const engagementRate = getEngagementRate(line);
               const spentRate = getSpentRate(line);
+              const progressRate = getProgressRateForLine(line);
               return (
                 <div key={line.id} className="p-2 bg-orange-50 border border-orange-200 rounded-lg">
                   <div className="flex items-center justify-between">
@@ -1186,7 +1784,10 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                     </div>
                     <div className="text-right flex-shrink-0 ml-2">
                       <p className="font-semibold text-orange-600 text-sm">{engagementRate.toFixed(2)}% engagé</p>
-                      <p className="text-xs text-gray-600">{spentRate.toFixed(2)}% décaissé</p>
+                      <p className="text-xs text-gray-600">Décaissé: {spentRate.toFixed(2)}%</p>
+                      {progressRate > 0 && (
+                        <p className="text-xs text-purple-600">Progression: {progressRate.toFixed(2)}%</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1216,17 +1817,17 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
             
             <div className="p-4 space-y-3">
               <div className="flex space-x-2">
-                <button onClick={selectAllBudgetLines} className="px-3 py-1 text-xs bg-blue-100 text-blue-700 rounded-md">
+                <button onClick={selectAllBudgetLines} className="px-3 py-1 text-xs bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 transition-colors">
                   Tout sélectionner
                 </button>
-                <button onClick={clearBudgetLineSelection} className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded-md">
+                <button onClick={clearBudgetLineSelection} className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors">
                   Tout désélectionner
                 </button>
               </div>
               
               <div className="max-h-64 overflow-y-auto border rounded-lg">
                 {filteredBudgetLines.map(budgetLine => (
-                  <label key={budgetLine.id} className="flex items-center p-3 hover:bg-gray-50 border-b last:border-b-0">
+                  <label key={budgetLine.id} className="flex items-center p-3 hover:bg-gray-50 border-b last:border-b-0 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={selectedBudgetLines.includes(budgetLine.id)}
@@ -1242,10 +1843,10 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
             </div>
             
             <div className="flex justify-end space-x-3 p-4 border-t">
-              <button onClick={() => setShowFilterModal(false)} className="px-4 py-2 text-gray-700 border rounded-lg">
+              <button onClick={() => setShowFilterModal(false)} className="px-4 py-2 text-gray-700 border rounded-lg hover:bg-gray-50 transition-colors">
                 Annuler
               </button>
-              <button onClick={() => setShowFilterModal(false)} className="px-4 py-2 bg-blue-600 text-white rounded-lg">
+              <button onClick={() => setShowFilterModal(false)} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
                 Appliquer
               </button>
             </div>
