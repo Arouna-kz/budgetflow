@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Plus, Edit, Trash2, Banknote, Calendar, Building, ChevronLeft, ChevronRight, 
   Search, Filter, X, DollarSign, Clock, TrendingUp, AlertCircle, CheckCircle,
   CreditCard, Wallet, Eye, PieChart
 } from 'lucide-react';
+import { Download, CheckSquare, Square } from 'lucide-react';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 import { showSuccess, showError, showValidationError, confirmDelete } from '../utils/alerts';
 import { Grant, BudgetLine, SubBudgetLine, Payment, Prefinancing, EmployeeLoan, GRANT_STATUS } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
@@ -20,6 +23,7 @@ interface GrantManagerProps {
   onDeleteGrant: (id: string) => void;
   onUpdateBudgetLine: (id: string, updates: Partial<BudgetLine>) => void;
   onUpdateSubBudgetLine: (id: string, updates: Partial<SubBudgetLine>) => void;
+  onNavigate?: (tab: string) => void;
 }
 
 const GrantManager: React.FC<GrantManagerProps> = ({
@@ -33,7 +37,8 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   onUpdateGrant,
   onDeleteGrant,
   onUpdateBudgetLine,
-  onUpdateSubBudgetLine
+  onUpdateSubBudgetLine,
+  onNavigate
 }) => {
   // États principaux
   const [showForm, setShowForm] = useState(false);
@@ -49,6 +54,18 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   const [showFilters, setShowFilters] = useState(false);
   const [selectedGrantId, setSelectedGrantId] = useState<string | null>(null);
   const [showGrantDetails, setShowGrantDetails] = useState(false);
+  const [selectedForExport, setSelectedForExport] = useState<Set<string>>(new Set());
+  const [isExporting, setIsExporting] = useState(false);
+  const exportContainerRef = useRef<HTMLDivElement>(null);
+  const ficheRef = useRef<HTMLDivElement>(null);
+
+  const toggleExportSelection = (id: string) => {
+    setSelectedForExport(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
 
   const [formData, setFormData] = useState({
     name: '',
@@ -199,9 +216,16 @@ const GrantManager: React.FC<GrantManagerProps> = ({
     }, 0);
   };
 
+  // Montant total des paiements rejetés d'une subvention
+  const getRejectedPaymentsForGrant = (grantId: string): number => {
+    return payments
+      .filter(p => p.grantId === grantId && p.status === 'rejected')
+      .reduce((sum, p) => sum + p.amount, 0);
+  };
+
   const getTotalEngagedNotDisbursed = (grantId: string) => {
-    const engagedPayments = payments.filter(p => 
-      p.grantId === grantId && 
+    const engagedPayments = payments.filter(p =>
+      p.grantId === grantId &&
       (p.status === 'pending' || p.status === 'in_progress')
     );
     
@@ -538,6 +562,8 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   const canEdit = hasPermission('grants', 'edit');
   const canDelete = hasPermission('grants', 'delete');
   const canView = hasPermission('grants', 'view');
+  // Peut exporter : uniquement si la permission d'export est accordée pour ce module
+  const canExport = hasPermission('grants', 'export');
 
   if (permissionsLoading) {
     return (
@@ -567,6 +593,177 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   const currentSortedGrants = sortedFilteredGrants.slice(startIndex, endIndex);
 
   // ============================================
+  // EXPORT PDF (capture visuelle fidèle) DES SUBVENTIONS
+  // ============================================
+
+  // Carte visuelle d'une subvention, identique à l'affichage — rendue hors-écran pour la capture
+  const GrantExportCard = ({ grant }: { grant: Grant }) => {
+    const stats = getPaymentStatsForGrant(grant.id);
+    const disbursed = getTotalDisbursed(grant.id);
+    const notified = grant.totalAmount || 0;
+    const engaged = stats.totalEngaged;
+    const nonEngaged = Math.max(0, notified - engaged);
+    const engRate = notified > 0 ? (engaged / notified) * 100 : 0;
+    const disbRate = notified > 0 ? (disbursed / notified) * 100 : 0;
+    const active = getActivePartialPaymentsForGrant(grant.id);
+    const rejected = getRejectedPaymentsForGrant(grant.id);
+    const days = grant.endDate ? getDaysRemaining(grant.endDate) : null;
+
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="flex items-center gap-2 mb-2">
+          <h4 className="text-lg font-semibold text-gray-900">{grant.name}</h4>
+          <span className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusColor(grant.status)}`}>{getStatusLabel(grant.status)}</span>
+          {active > 0 && (
+            <span className="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-purple-100 text-purple-800">
+              <DollarSign className="w-3 h-3 mr-1" />{active} échelonné(s)
+            </span>
+          )}
+        </div>
+        <div className="flex items-center flex-wrap gap-x-4 gap-y-1 text-sm text-gray-600 mb-3">
+          <span className="flex items-center gap-1"><Building className="w-4 h-4" />{grant.grantingOrganization}</span>
+          <span>•</span><span>Réf: {grant.reference}</span>
+          <span>•</span><span>{grant.year}</span>
+          {days !== null && (<><span>•</span><span className="flex items-center gap-1 text-green-600"><Calendar className="w-4 h-4" />{days > 0 ? `${days} jours restants` : days === 0 ? "Expire aujourd'hui" : 'Expiré'}</span></>)}
+        </div>
+        {grant.description && <p className="text-sm text-gray-500 mb-4">{grant.description}</p>}
+        <div className="grid grid-cols-5 gap-3 mb-4">
+          <div className="bg-blue-50 rounded-lg p-3">
+            <p className="text-xs text-blue-600 font-medium mb-1">Notifié</p>
+            <p className="text-base font-semibold text-blue-900">{formatCurrency(notified, grant.currency)}</p>
+            <p className="text-[10px] text-blue-500 mt-1">Budget alloué total</p>
+          </div>
+          <div className="bg-orange-50 rounded-lg p-3">
+            <p className="text-xs text-orange-600 font-medium mb-1">Engagé</p>
+            <p className="text-base font-semibold text-orange-900">{formatCurrency(engaged, grant.currency)}</p>
+            <p className="text-[10px] text-orange-500 mt-1">{engRate.toFixed(2)}% du notifié</p>
+          </div>
+          <div className="bg-green-50 rounded-lg p-3">
+            <p className="text-xs text-green-600 font-medium mb-1">Décaissé</p>
+            <p className="text-base font-semibold text-green-900">{formatCurrency(disbursed, grant.currency)}</p>
+            <p className="text-[10px] text-green-500 mt-1">{disbRate.toFixed(2)}% du notifié</p>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3">
+            <p className="text-xs text-gray-600 font-medium mb-1">Non engagé</p>
+            <p className="text-base font-semibold text-gray-900">{formatCurrency(nonEngaged, grant.currency)}</p>
+            <p className="text-[10px] text-gray-500 mt-1">Reste à engager</p>
+          </div>
+          <div className="bg-red-50 rounded-lg p-3">
+            <p className="text-xs text-red-600 font-medium mb-1">Paiements rejetés</p>
+            <p className="text-base font-semibold text-red-900">{formatCurrency(rejected, grant.currency)}</p>
+            <p className="text-[10px] text-red-500 mt-1">Paiements refusés</p>
+          </div>
+        </div>
+        <div className="space-y-2 mb-3">
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-sm font-medium text-gray-700">Taux d'engagement</span>
+              <span className="text-sm text-gray-600">{engRate.toFixed(2)}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div className="h-2 rounded-full bg-green-500" style={{ width: `${Math.min(engRate, 100)}%` }} />
+            </div>
+          </div>
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-sm font-medium text-gray-700">Taux de décaissement</span>
+              <span className="text-sm text-gray-600">{disbRate.toFixed(2)}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div className="h-2 rounded-full bg-blue-500" style={{ width: `${Math.min(disbRate, 100)}%` }} />
+            </div>
+          </div>
+        </div>
+        {grant.bankAccount && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-center justify-between">
+            <span className="flex items-center gap-2 text-green-900 font-medium">
+              <Wallet className="w-4 h-4 text-green-600" />
+              {grant.bankAccount.name} <span className="text-green-600 font-normal">{grant.bankAccount.bankName}</span>
+            </span>
+            <span className="text-green-900">Solde <span className="font-bold text-green-600">{formatCurrency(grant.bankAccount.balance, grant.currency)}</span></span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Capture un noeud DOM et l'ajoute au PDF (une page par carte, ajustée à la page)
+  const addNodeToPDF = async (pdf: jsPDF, node: HTMLElement, addPage: boolean) => {
+    const canvas = await html2canvas(node, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+    const imgData = canvas.toDataURL('image/png');
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const margin = 8;
+    let imgW = pageW - margin * 2;
+    let imgH = (canvas.height * imgW) / canvas.width;
+    if (imgH > pageH - margin * 2) {
+      imgH = pageH - margin * 2;
+      imgW = (canvas.width * imgH) / canvas.height;
+    }
+    if (addPage) pdf.addPage();
+    pdf.addImage(imgData, 'PNG', (pageW - imgW) / 2, margin, imgW, imgH);
+  };
+
+  const exportGrantsPDF = async (list: Grant[], filename: string) => {
+    if (!list.length) {
+      showValidationError('Aucune subvention', 'Cochez au moins une subvention à exporter.');
+      return;
+    }
+    setIsExporting(true);
+    try {
+      await new Promise(res => setTimeout(res, 80)); // laisser le rendu hors-écran se peindre
+      const container = exportContainerRef.current;
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      let first = true;
+      for (const grant of list) {
+        const node = container?.querySelector(`[data-grant-id="${grant.id}"]`) as HTMLElement | null;
+        if (!node) continue;
+        await addNodeToPDF(pdf, node, !first);
+        first = false;
+      }
+      pdf.save(filename);
+      showSuccess('Export réussi', `${list.length} subvention(s) exportée(s) en PDF.`);
+    } catch (e) {
+      console.error('Export subventions échoué:', e);
+      showError('Erreur', 'Impossible de générer le PDF.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // Export de la fiche détaillée (capture fidèle de la modale)
+  const exportGrantFiche = async (grant: Grant) => {
+    if (!ficheRef.current) return;
+    setIsExporting(true);
+    try {
+      const canvas = await html2canvas(ficheRef.current, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const imgW = pageW;
+      const imgH = (canvas.height * imgW) / canvas.width;
+      let heightLeft = imgH;
+      let position = 0;
+      pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH);
+      heightLeft -= pageH;
+      while (heightLeft > 0) {
+        position -= pageH;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH);
+        heightLeft -= pageH;
+      }
+      pdf.save(`Fiche_Subvention_${grant.reference || grant.name}.pdf`);
+      showSuccess('Export réussi', 'Fiche exportée en PDF.');
+    } catch (e) {
+      console.error('Export fiche échoué:', e);
+      showError('Erreur', 'Impossible de générer le PDF.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // ============================================
   // COMPOSANT DETAILS GRANT
   // ============================================
 
@@ -586,18 +783,29 @@ const GrantManager: React.FC<GrantManagerProps> = ({
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+        <div ref={ficheRef} className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
           <div className="sticky top-0 bg-white z-10 p-6 border-b flex items-center justify-between">
             <div>
               <h3 className="text-xl font-bold text-gray-900">{grant.name}</h3>
               <p className="text-sm text-gray-600">{grant.reference}</p>
             </div>
-            <button
-              onClick={onClose}
-              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
-            >
-              <X className="w-6 h-6" />
-            </button>
+            <div className="flex items-center space-x-2" data-html2canvas-ignore="true">
+              <button
+                onClick={() => exportGrantFiche(grant)}
+                disabled={isExporting}
+                className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+                title="Exporter cette fiche en PDF"
+              >
+                <Download className="w-4 h-4" />
+                <span>{isExporting ? 'Génération...' : 'Exporter la fiche'}</span>
+              </button>
+              <button
+                onClick={onClose}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
           </div>
 
           <div className="p-6 space-y-6">
@@ -660,6 +868,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                 <div>
                   <p className="text-sm text-gray-600">Montant notifié</p>
                   <p className="font-bold text-blue-600">{formatCurrency(grant.totalAmount, grant.currency)}</p>
+                  <p className="text-xs text-gray-500">Budget alloué total</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Montant engagé</p>
@@ -672,67 +881,12 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                   <p className="text-xs text-gray-500">{disbursementRate.toFixed(2)}% du notifié</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Reste à payer</p>
-                  <p className="font-bold text-red-600">{formatCurrency(paymentStats.remainingToPay, grant.currency)}</p>
+                  <p className="text-sm text-gray-600">Paiements rejetés</p>
+                  <p className="font-bold text-red-600">{formatCurrency(getRejectedPaymentsForGrant(grant.id), grant.currency)}</p>
+                  <p className="text-xs text-gray-500">Paiements refusés</p>
                 </div>
               </div>
             </div>
-
-            {/* Paiements échelonnés */}
-            {partialPayments.length > 0 && (
-              <div>
-                <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
-                  <DollarSign className="w-4 h-4 mr-2 text-purple-600" />
-                  Paiements échelonnés ({partialPayments.length})
-                </h4>
-                <div className="space-y-3">
-                  {partialPayments.map(payment => {
-                    const totalPaid = payment.partialPayments?.reduce((sum, pp) => sum + pp.amount, 0) || 0;
-                    const progress = payment.amount > 0 ? (totalPaid / payment.amount) * 100 : 0;
-                    const remaining = payment.amount - totalPaid;
-                    
-                    return (
-                      <div key={payment.id} className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                        <div className="flex justify-between items-center mb-2">
-                          <div>
-                            <p className="font-medium text-gray-900">{payment.paymentNumber}</p>
-                            <p className="text-sm text-gray-600">{payment.supplier}</p>
-                          </div>
-                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                            payment.status === 'paid' ? 'bg-green-100 text-green-800' :
-                            payment.status === 'in_progress' ? 'bg-purple-100 text-purple-800' :
-                            'bg-yellow-100 text-yellow-800'
-                          }`}>
-                            {payment.status === 'paid' ? 'Payé' :
-                             payment.status === 'in_progress' ? 'En cours' : 'En attente'}
-                          </span>
-                        </div>
-                        
-                        <div className="space-y-2">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-gray-600">Progression</span>
-                            <span className="font-medium text-purple-600">{progress.toFixed(0)}%</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2">
-                            <div 
-                              className="h-2 rounded-full bg-purple-600 transition-all duration-300"
-                              style={{ width: `${Math.min(progress, 100)}%` }}
-                            />
-                          </div>
-                          <div className="flex justify-between text-sm">
-                            <span>Payé: {formatCurrency(totalPaid, grant.currency)}</span>
-                            <span className="text-orange-600">Reste: {formatCurrency(remaining, grant.currency)}</span>
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {payment.partialPayments?.length || 0} versement(s) effectué(s)
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
             {/* Compte bancaire */}
             {grant.bankAccount && (
@@ -776,21 +930,50 @@ const GrantManager: React.FC<GrantManagerProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Conteneur hors-écran pour la capture PDF des subventions cochées */}
+      <div
+        ref={exportContainerRef}
+        aria-hidden="true"
+        style={{ position: 'absolute', left: '-99999px', top: 0, width: '820px', background: '#ffffff' }}
+      >
+        {filteredGrants.filter(g => selectedForExport.has(g.id)).map(g => (
+          <div key={g.id} data-grant-id={g.id} className="p-6 bg-white">
+            <GrantExportCard grant={g} />
+          </div>
+        ))}
+      </div>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Gestion des Subventions</h2>
           <p className="text-gray-600 mt-1">Gérez vos subventions et financements</p>
         </div>
-        {canCreate && (
-          <button
-            onClick={() => setShowForm(true)}
-            className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2 w-full sm:w-auto justify-center"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Nouvelle Subvention</span>
-          </button>
-        )}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          {canExport && (
+            <button
+              onClick={() => exportGrantsPDF(
+                filteredGrants.filter(g => selectedForExport.has(g.id)),
+                `Subventions_selection_${new Date().toISOString().slice(0, 10)}.pdf`
+              )}
+              disabled={selectedForExport.size === 0 || isExporting}
+              className="bg-white border border-blue-600 text-blue-700 px-4 py-2 rounded-xl font-medium hover:bg-blue-50 transition-all duration-200 flex items-center space-x-2 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Cochez des subventions puis exportez-les en PDF avec leurs détails"
+            >
+              <Download className="w-4 h-4" />
+              <span>{isExporting ? 'Génération...' : `Exporter la sélection (${selectedForExport.size})`}</span>
+            </button>
+          )}
+          {canCreate && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2 justify-center"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Nouvelle Subvention</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Section Recherche et Filtres */}
@@ -1240,6 +1423,18 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                     <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between mb-4 gap-4">
                       <div className="flex-1">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-3 mb-2 gap-2">
+                          {canExport && (
+                            <button
+                              type="button"
+                              onClick={() => toggleExportSelection(grant.id)}
+                              className="flex items-center text-gray-400 hover:text-blue-600 transition-colors w-fit"
+                              title={selectedForExport.has(grant.id) ? 'Retirer de la sélection à exporter' : 'Sélectionner pour l\'export'}
+                            >
+                              {selectedForExport.has(grant.id)
+                                ? <CheckSquare className="w-5 h-5 text-blue-600" />
+                                : <Square className="w-5 h-5" />}
+                            </button>
+                          )}
                           <h4 className="text-lg font-semibold text-gray-900">{grant.name}</h4>
                           <span className={`px-2 py-1 text-xs font-medium rounded-full w-fit ${getStatusColor(grant.status)}`}>
                             {getStatusLabel(grant.status)}
@@ -1312,65 +1507,61 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                     </div>
 
                     {/* Résumé financier */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 md:gap-3 mb-4">
-                      <div className="bg-blue-50 rounded-lg p-2 md:p-3">
+                    <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 md:gap-3 mb-4">
+                      <div
+                        onClick={() => onNavigate && onNavigate('budget_planning')}
+                        title="Budget total notifié pour la subvention — cliquez pour la planification"
+                        className={`bg-blue-50 rounded-lg p-2 md:p-3 ${onNavigate ? 'cursor-pointer hover:ring-2 hover:ring-blue-200 transition' : ''}`}
+                      >
                         <p className="text-xs text-blue-600 font-medium mb-1">Notifié</p>
                         <p className="text-sm md:text-base font-semibold text-blue-900">
                           {formatCurrency(grant.totalAmount, grant.currency)}
                         </p>
+                        <p className="text-[10px] text-blue-500 mt-1">Budget alloué total</p>
                       </div>
-                      <div className="bg-orange-50 rounded-lg p-2 md:p-3">
+                      <div
+                        onClick={() => onNavigate && onNavigate('engagements')}
+                        title="Montant des engagements approuvés — cliquez pour la page Engagements"
+                        className={`bg-orange-50 rounded-lg p-2 md:p-3 ${onNavigate ? 'cursor-pointer hover:ring-2 hover:ring-orange-200 transition' : ''}`}
+                      >
                         <p className="text-xs text-orange-600 font-medium mb-1">Engagé</p>
                         <p className="text-sm md:text-base font-semibold text-orange-900">
                           {formatCurrency(totalEngaged, grant.currency)}
                         </p>
-                        <p className="text-xs text-orange-500">
-                          {utilizationRate.toFixed(2)}%
-                        </p>
+                        <p className="text-[10px] text-orange-500 mt-1">{utilizationRate.toFixed(2)}% du notifié</p>
                       </div>
-                      <div className="bg-green-50 rounded-lg p-2 md:p-3">
+                      <div
+                        onClick={() => onNavigate && onNavigate('treasury')}
+                        title="Argent réellement décaissé (direct + échelonné) — cliquez pour la Trésorerie"
+                        className={`bg-green-50 rounded-lg p-2 md:p-3 ${onNavigate ? 'cursor-pointer hover:ring-2 hover:ring-green-200 transition' : ''}`}
+                      >
                         <p className="text-xs text-green-600 font-medium mb-1">Décaissé</p>
                         <p className="text-sm md:text-base font-semibold text-green-900">
                           {formatCurrency(totalDisbursed, grant.currency)}
                         </p>
-                        <p className="text-xs text-green-500">
-                          {disbursementRate.toFixed(2)}%
-                        </p>
+                        <p className="text-[10px] text-green-500 mt-1">{disbursementRate.toFixed(2)}% du notifié</p>
                       </div>
-                      <div className="bg-purple-50 rounded-lg p-2 md:p-3">
-                        <p className="text-xs text-purple-600 font-medium mb-1">En cours</p>
-                        <p className="text-sm md:text-base font-semibold text-purple-900">
-                          {formatCurrency(paymentStats.inProgress, grant.currency)}
-                        </p>
-                        {activePartialPayments > 0 && (
-                          <p className="text-xs text-purple-500">
-                            {activePartialPayments} paiement(s)
-                          </p>
-                        )}
-                      </div>
-                      <div className="bg-red-50 rounded-lg p-2 md:p-3">
-                        <p className="text-xs text-red-600 font-medium mb-1">Reste</p>
-                        <p className="text-sm md:text-base font-semibold text-red-900">
-                          {formatCurrency(paymentStats.remainingToPay, grant.currency)}
-                        </p>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-2 md:p-3">
+                      <div
+                        onClick={() => onNavigate && onNavigate('engagements')}
+                        title="Budget encore disponible à engager (Notifié − Engagé) — cliquez pour les Engagements"
+                        className={`bg-gray-50 rounded-lg p-2 md:p-3 ${onNavigate ? 'cursor-pointer hover:ring-2 hover:ring-gray-200 transition' : ''}`}
+                      >
                         <p className="text-xs text-gray-600 font-medium mb-1">Non engagé</p>
                         <p className="text-sm md:text-base font-semibold text-gray-900">
                           {formatCurrency(Math.max(0, grant.totalAmount - totalEngaged), grant.currency)}
                         </p>
+                        <p className="text-[10px] text-gray-500 mt-1">Reste à engager</p>
                       </div>
-                      <div className="bg-indigo-50 rounded-lg p-2 md:p-3">
-                        <p className="text-xs text-indigo-600 font-medium mb-1">Progression</p>
-                        <p className="text-sm md:text-base font-semibold text-indigo-900">
-                          {progressRate.toFixed(2)}%
+                      <div
+                        onClick={() => onNavigate && onNavigate('payments')}
+                        title="Montant des paiements refusés — cliquez pour la page Paiements"
+                        className={`bg-red-50 rounded-lg p-2 md:p-3 ${onNavigate ? 'cursor-pointer hover:ring-2 hover:ring-red-200 transition' : ''}`}
+                      >
+                        <p className="text-xs text-red-600 font-medium mb-1">Paiements rejetés</p>
+                        <p className="text-sm md:text-base font-semibold text-red-900">
+                          {formatCurrency(getRejectedPaymentsForGrant(grant.id), grant.currency)}
                         </p>
-                        <div className="w-full bg-gray-200 rounded-full h-1 mt-1">
-                          <div 
-                            className="h-1 rounded-full bg-indigo-600 transition-all duration-300"
-                            style={{ width: `${Math.min(progressRate, 100)}%` }}
-                          />
-                        </div>
+                        <p className="text-[10px] text-red-500 mt-1">Paiements refusés</p>
                       </div>
                     </div>
 
@@ -1408,20 +1599,6 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                         </div>
                       </div>
 
-                      {activePartialPayments > 0 && (
-                        <div>
-                          <div className="flex justify-between items-center mb-1">
-                            <span className="text-sm font-medium text-purple-700">Progression des paiements échelonnés</span>
-                            <span className="text-sm text-purple-600">{progressRate.toFixed(2)}%</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2">
-                            <div 
-                              className="h-2 rounded-full bg-purple-600 transition-all duration-300"
-                              style={{ width: `${Math.min(progressRate, 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
                     </div>
 
                     {/* Compte bancaire */}

@@ -1332,9 +1332,9 @@ function App() {
   // ============================================================
   const menuItems = [
     { id: 'dashboard', label: 'Tableau de Bord', icon: BarChart3, module: 'dashboard' },
+    { id: 'tracking', label: 'Tableau de suivi budgétaire', icon: BarChart3, module: 'tracking' },
     { id: 'grants', label: 'Gestion des Subventions', icon: Banknote, module: 'grants' },
     { id: 'budget_planning', label: 'Planification', icon: Target, module: 'budget_planning' },
-    { id: 'tracking', label: 'Suivi Budgétaire', icon: BarChart3, module: 'tracking' },
     {
       id: 'engagements',
       label: 'Engagements',
@@ -1471,9 +1471,11 @@ function App() {
               </div>
 
               {selectedGrant && (
-                <div 
-                  className="hidden md:flex items-center space-x-2 bg-white/10 backdrop-blur-sm px-3 py-1 rounded-xl border border-white/20 group relative"
-                  title={`Subvention active: ${selectedGrant.name}`}
+                <div
+                  onClick={() => { if (hasModuleAccess('globalConfig')) setActiveTab('globalConfig'); }}
+                  role={hasModuleAccess('globalConfig') ? 'button' : undefined}
+                  className={`hidden md:flex items-center space-x-2 bg-white/10 backdrop-blur-sm px-3 py-1 rounded-xl border border-white/20 group relative transition-colors ${hasModuleAccess('globalConfig') ? 'cursor-pointer hover:bg-white/20' : ''}`}
+                  title={hasModuleAccess('globalConfig') ? `Subvention active : ${selectedGrant.name} — cliquez pour changer de subvention` : `Subvention active : ${selectedGrant.name}`}
                 >
                   <Banknote className="w-4 h-4 text-indigo-200 flex-shrink-0" />
                   <div className="max-w-[180px]">
@@ -1484,6 +1486,9 @@ function App() {
                   </div>
                   <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 hidden group-hover:block bg-gray-900 text-white text-sm rounded-lg py-2 px-3 whitespace-normal max-w-xs text-center shadow-lg z-50 border border-gray-700">
                     {selectedGrant.name}
+                    {hasModuleAccess('globalConfig') && (
+                      <span className="block text-indigo-300 mt-1">Cliquez pour changer de subvention</span>
+                    )}
                     <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-b-gray-900"></div>
                   </div>
                 </div>
@@ -1640,7 +1645,7 @@ function App() {
         <div className="flex-1 min-w-0 xl:ml-0">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             {activeTab === 'dashboard' && (
-              <Dashboard 
+              <Dashboard
                 grants={[selectedGrant].filter(Boolean) as Grant[]}
                 budgetLines={filteredData.budgetLines}
                 subBudgetLines={filteredData.subBudgetLines}
@@ -1648,6 +1653,7 @@ function App() {
                 prefinancings={prefinancings}
                 employeeLoans={employeeLoans}
                 engagements={filteredData.engagements}
+                onNavigate={setActiveTab}
               />
             )}
 
@@ -1664,9 +1670,10 @@ function App() {
                 onDeleteGrant={handleDeleteGrant}
                 onUpdateBudgetLine={handleUpdateBudgetLine}
                 onUpdateSubBudgetLine={handleUpdateSubBudgetLine}
+                onNavigate={setActiveTab}
               />
             )}
-            
+
             {activeTab === 'globalConfig' && (
               <GrantSelector
                 grants={grants}
@@ -1705,6 +1712,7 @@ function App() {
                 engagements={filteredData.engagements}
                 selectedGrantId={selectedGrantId}
                 onViewEngagements={handleViewEngagements}
+                onNavigate={setActiveTab}
               />
             )}
 

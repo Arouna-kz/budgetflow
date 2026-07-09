@@ -18,6 +18,7 @@ interface BudgetTrackingProps {
   payments: Payment[];
   selectedGrantId: string;
   onViewEngagements: (subBudgetLineId: string) => void;
+  onNavigate?: (tab: string) => void;
 }
 
 type SortField = 'name' | 'code' | 'notifiedAmount' | 'engagedAmount' | 'spentAmount' | 'availableAmount' | 'engagementRate' | 'spentRate' | 'inProgressAmount' | 'remainingToPay' | 'progressRate';
@@ -40,8 +41,9 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   grants, 
   engagements, 
   payments = [],
-  selectedGrantId, 
-  onViewEngagements 
+  selectedGrantId,
+  onViewEngagements,
+  onNavigate
 }) => {
   // États
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
@@ -228,6 +230,17 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
    */
   const getTotalInProgressForAllSubBudgetLines = () => {
     return filteredSubBudgetLines.reduce((total, line) => total + getInProgressAmountForSubLine(line.id), 0);
+  };
+
+  /**
+   * Paiements en attente pour une sous-ligne = paiements approuvés (non décaissés)
+   * + reste à payer des paiements échelonnés en cours.
+   */
+  const getPendingPaymentsForSubLine = (subBudgetLineId: string): number => {
+    const approved = payments
+      .filter(p => p.subBudgetLineId === subBudgetLineId && p.status === 'approved')
+      .reduce((s, p) => s + p.amount, 0);
+    return approved + getInProgressAmountForSubLine(subBudgetLineId);
   };
 
   /**
@@ -424,6 +437,32 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   const overallProgressRate = totalNotified > 0 ? ((totalSpent + totalInProgress) / totalNotified) * 100 : 0;
   const activePartialPayments = getActivePartialPaymentsCount();
 
+  // ✅ Nouvelles mesures pour les cartes récapitulatives
+  const filteredLineIds = new Set(filteredSubBudgetLinesData.map(l => l.id));
+  // Montant non engagé = budget notifié encore disponible à engager
+  const totalNonEngaged = Math.max(0, totalNotified - totalEngaged);
+  // Engagements rejetés (montant) — retournent au disponible
+  const rejectedEngagementsAmount = engagements
+    .filter(e => e.status === 'rejected' && filteredLineIds.has(e.subBudgetLineId))
+    .reduce((s, e) => s + e.amount, 0);
+  // Paiements approuvés (non encore décaissés) — montant total
+  const approvedPaymentsAmount = payments
+    .filter(p => p.status === 'approved' && filteredLineIds.has(p.subBudgetLineId))
+    .reduce((s, p) => s + p.amount, 0);
+  // Paiements en attente = paiements approuvés + reste à payer des paiements échelonnés en cours
+  const pendingPaymentsAmount = approvedPaymentsAmount + totalInProgress;
+  // Paiements à créer = engagements approuvés dont la fiche de paiement n'existe pas encore
+  const paymentsToCreateAmount = engagements
+    .filter(e => e.status === 'approved'
+      && filteredLineIds.has(e.subBudgetLineId)
+      && !payments.some(p => p.engagementId === e.id))
+    .reduce((s, e) => s + e.amount, 0);
+  // Paiements rejetés (montant)
+  const rejectedPaymentsAmount = payments
+    .filter(p => p.status === 'rejected' && filteredLineIds.has(p.subBudgetLineId))
+    .reduce((s, p) => s + p.amount, 0);
+  const go = (tab: string) => onNavigate && onNavigate(tab);
+
   const alertLines = filteredSubBudgetLinesData.filter(line => {
     const engagementRate = getEngagementRate(line);
     return engagementRate > 90;
@@ -480,6 +519,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       ...line,
       spentAmount,
       inProgressAmount,
+      pendingPayments: getPendingPaymentsForSubLine(line.id),
       remainingToPay,
       progressRate,
       engagementRate,
@@ -1038,23 +1078,30 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   // COMPOSANT STAT CARD
   // ============================================
 
-  const StatCard = ({ title, value, subtitle, icon: Icon, color, badge }: any) => (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-3 sm:p-4 relative">
+  const StatCard = ({ title, value, subtitle, description, icon: Icon, color, badge, onClick }: any) => (
+    <div
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      title={onClick ? 'Cliquez pour ouvrir la page concernée' : undefined}
+      className={`bg-white rounded-xl shadow-sm border border-gray-100 p-3 sm:p-4 relative flex flex-col h-full ${onClick ? 'cursor-pointer hover:shadow-md hover:border-purple-300 hover:-translate-y-0.5 transition-all duration-200' : ''}`}
+    >
       {badge && (
         <div className="absolute -top-1 -right-1 bg-purple-600 text-white text-xs px-2 py-0.5 rounded-full">
           {badge}
         </div>
       )}
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
-          <p className="text-xs sm:text-sm font-medium text-gray-600 truncate">{title}</p>
-          <p className={`text-lg sm:text-xl font-bold ${color} truncate`}>{value}</p>
-          {subtitle && <p className="text-xs text-gray-500 mt-1 truncate">{subtitle}</p>}
+          <p className="text-xs sm:text-sm font-semibold text-gray-700 leading-tight">{title}</p>
+          <p className={`text-lg sm:text-xl font-bold ${color} mt-1`}>{value}</p>
+          {subtitle && <p className="text-xs text-gray-500 mt-1">{subtitle}</p>}
         </div>
         <div className={`p-2 ${color.replace('text-', 'bg-').replace('-600', '-100')} rounded-full flex-shrink-0 ml-2`}>
           <Icon className="w-3 h-3 sm:w-4 sm:h-4" />
         </div>
       </div>
+      {description && <p className="text-[11px] text-gray-400 mt-2 leading-snug">{description}</p>}
+      {onClick && <p className="text-[10px] text-purple-500 mt-auto pt-1 font-medium">Cliquer pour voir →</p>}
     </div>
   );
 
@@ -1063,7 +1110,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   // ============================================
 
   return (
-    <div className="space-y-4 sm:space-y-6 p-3 sm:p-4">
+    <div className="flex flex-col space-y-4 sm:space-y-6 p-3 sm:p-4">
       {/* Header Mobile */}
       <div className="lg:hidden">
         <div className="flex items-center justify-between mb-4">
@@ -1220,53 +1267,97 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         </div>
       </div>
 
-      {/* Summary Cards avec paiements échelonnés */}
-      <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
+      {/* Cartes récapitulatives — Ligne 1 : engagement */}
+      <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
         <StatCard
           title="Budget Notifié"
           value={selectedGrant ? formatCurrency(totalNotified, selectedGrant.currency) : totalNotified.toLocaleString('fr-FR')}
+          description="Budget total alloué et notifié pour cette subvention."
           icon={TrendingUp}
           color="text-blue-600"
+          onClick={() => go('budget_planning')}
         />
         <StatCard
           title="Montant Engagé"
           value={selectedGrant ? formatCurrency(totalEngaged, selectedGrant.currency) : totalEngaged.toLocaleString('fr-FR')}
+          description="Total des engagements approuvés (dépenses réservées)."
           icon={CheckCircle}
           color="text-green-600"
+          onClick={() => go('engagements')}
         />
         <StatCard
-          title="Décaissé (échelonné + direct)"
-          value={selectedGrant ? formatCurrency(totalSpent, selectedGrant.currency) : totalSpent.toLocaleString('fr-FR')}
-          subtitle={`Taux: ${overallSpentRate.toFixed(2)}%`}
-          icon={FileText}
-          color="text-blue-600"
-        />
-        <StatCard
-          title="En Cours de Paiement"
-          value={selectedGrant ? formatCurrency(totalInProgress, selectedGrant.currency) : totalInProgress.toLocaleString('fr-FR')}
-          subtitle={`${activePartialPayments} paiement(s) échelonné(s)`}
+          title="Montant Non Engagé"
+          value={selectedGrant ? formatCurrency(totalNonEngaged, selectedGrant.currency) : totalNonEngaged.toLocaleString('fr-FR')}
+          description="Budget notifié encore disponible à engager (Notifié − Engagé)."
           icon={DollarSign}
-          color="text-purple-600"
-          badge={activePartialPayments > 0 ? activePartialPayments : undefined}
+          color="text-teal-600"
+          onClick={() => go('engagements')}
         />
         <StatCard
-          title="Reste à Payer"
-          value={selectedGrant ? formatCurrency(totalRemainingToPay, selectedGrant.currency) : totalRemainingToPay.toLocaleString('fr-FR')}
+          title="Engagements Rejetés"
+          value={selectedGrant ? formatCurrency(rejectedEngagementsAmount, selectedGrant.currency) : rejectedEngagementsAmount.toLocaleString('fr-FR')}
+          description="Montant des engagements refusés — réaffecté au disponible."
+          icon={AlertTriangle}
+          color="text-red-600"
+          onClick={() => go('engagements')}
+        />
+      </div>
+
+      {/* Cartes récapitulatives — Ligne 2 : paiement */}
+      <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+        <StatCard
+          title="Montant Décaissé (échelonné + direct)"
+          value={selectedGrant ? formatCurrency(totalSpent, selectedGrant.currency) : totalSpent.toLocaleString('fr-FR')}
+          description="Argent réellement sorti : paiements directs + part déjà payée des échelonnés."
+          icon={FileText}
+          color="text-indigo-600"
+          onClick={() => go('treasury')}
+        />
+        <StatCard
+          title="Paiements en Attente"
+          value={selectedGrant ? formatCurrency(pendingPaymentsAmount, selectedGrant.currency) : pendingPaymentsAmount.toLocaleString('fr-FR')}
+          description="Paiements approuvés non décaissés + reste à payer des échelonnés en cours."
           icon={Clock}
           color="text-orange-600"
+          onClick={() => go('payments')}
         />
         <StatCard
-          title="Solde Disponible"
-          value={selectedGrant ? formatCurrency(totalAvailable, selectedGrant.currency) : totalAvailable.toLocaleString('fr-FR')}
-          icon={TrendingUp}
-          color="text-green-600"
-        />
-        <StatCard
-          title="Progression Globale"
-          value={`${overallProgressRate.toFixed(2)}%`}
-          subtitle={`Engagé: ${overallEngagementRate.toFixed(2)}%`}
-          icon={AlertTriangle}
+          title="Paiement à Créer"
+          value={selectedGrant ? formatCurrency(paymentsToCreateAmount, selectedGrant.currency) : paymentsToCreateAmount.toLocaleString('fr-FR')}
+          description="Engagements approuvés dont la fiche de paiement n'a pas encore été créée."
+          icon={DollarSign}
           color="text-purple-600"
+          onClick={() => go('payments')}
+        />
+        <StatCard
+          title="Paiements Rejetés"
+          value={selectedGrant ? formatCurrency(rejectedPaymentsAmount, selectedGrant.currency) : rejectedPaymentsAmount.toLocaleString('fr-FR')}
+          description="Montant des paiements refusés."
+          icon={AlertTriangle}
+          color="text-red-600"
+          onClick={() => go('payments')}
+        />
+      </div>
+
+      {/* Cartes de taux — calcul explicité */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
+        <StatCard
+          title="Taux d'Engagement"
+          value={`${overallEngagementRate.toFixed(2)}%`}
+          subtitle="= Montant engagé ÷ Budget notifié"
+          description="Part du budget notifié déjà engagée dans des dépenses approuvées."
+          icon={CheckCircle}
+          color="text-green-600"
+          onClick={() => go('engagements')}
+        />
+        <StatCard
+          title="Taux de Décaissement"
+          value={`${overallSpentRate.toFixed(2)}%`}
+          subtitle="= Montant décaissé ÷ Budget notifié"
+          description="Part du budget notifié déjà décaissée (réellement payée)."
+          icon={FileText}
+          color="text-indigo-600"
+          onClick={() => go('treasury')}
         />
       </div>
 
@@ -1342,8 +1433,8 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         </div>
       )}
 
-      {/* Tableau */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      {/* Tableau — placé en bas (après Suivi par ligne et Alertes) via order-last */}
+      <div className="order-last bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-3 sm:p-4 border-b border-gray-200">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900">
@@ -1439,38 +1530,24 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                       </div>
                       <div>
                         <span className="text-gray-600">Décaissé:</span>
-                        <p className="font-medium text-blue-600">{formatCurrency(line.spentAmount, line.grantCurrency)}</p>
+                        <p className="font-medium text-indigo-600">{formatCurrency(line.spentAmount, line.grantCurrency)}</p>
                       </div>
                       <div>
-                        <span className="text-gray-600">En cours:</span>
-                        <p className="font-medium text-purple-600">{formatCurrency(line.inProgressAmount, line.grantCurrency)}</p>
+                        <span className="text-gray-600" title="Paiements approuvés non décaissés + reste à payer des échelonnés">Paiements en attente:</span>
+                        <p className="font-medium text-orange-600">{formatCurrency(line.pendingPayments, line.grantCurrency)}</p>
                       </div>
                       <div>
                         <span className="text-gray-600">Reste:</span>
                         <p className="font-medium text-orange-600">{formatCurrency(line.remainingToPay, line.grantCurrency)}</p>
                       </div>
                       <div>
-                        <span className="text-gray-600">Solde:</span>
+                        <span className="text-gray-600" title="Budget notifié encore disponible">Disponible:</span>
                         <p className={`font-medium ${line.availableAmount < 0 ? 'text-red-600' : 'text-green-600'}`}>
                           {formatCurrency(line.availableAmount, line.grantCurrency)}
                         </p>
                       </div>
                     </div>
-                    
-                    {/* Barre de progression */}
-                    <div className="mt-2">
-                      <div className="flex justify-between text-xs text-gray-600">
-                        <span>Progression</span>
-                        <span className="font-medium text-purple-600">{line.progressRate.toFixed(1)}%</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
-                        <div 
-                          className={`h-2 rounded-full transition-all duration-300 ${getProgressColor(line.progressRate)}`}
-                          style={{ width: `${Math.min(line.progressRate, 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                    
+
                     <div className="flex justify-between items-center mt-2">
                       <span className="text-xs text-gray-500">
                         {line.paymentStats.partialPaymentsCount > 0 
@@ -1526,21 +1603,20 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                           <SortIcon field="spentAmount" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('inProgressAmount')}>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap" title="Paiements approuvés non décaissés + reste à payer des paiements échelonnés en cours">
                         <div className="flex items-center justify-end space-x-1">
-                          <span className="text-purple-600">En cours</span>
-                          <SortIcon field="inProgressAmount" />
+                          <span className="text-orange-600">Paiements en attente</span>
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('remainingToPay')}>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('remainingToPay')} title="Montant engagé restant à payer">
                         <div className="flex items-center justify-end space-x-1">
                           <span className="text-orange-600">Reste</span>
                           <SortIcon field="remainingToPay" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('availableAmount')}>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('availableAmount')} title="Budget notifié encore disponible sur la sous-ligne">
                         <div className="flex items-center justify-end space-x-1">
-                          <span>Solde</span>
+                          <span>Disponible</span>
                           <SortIcon field="availableAmount" />
                         </div>
                       </th>
@@ -1550,16 +1626,10 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                           <SortIcon field="engagementRate" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('spentRate')}>
+                      <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('spentRate')} title="Décaissé ÷ Budget notifié">
                         <div className="flex items-center justify-center space-x-1">
                           <span>Taux Déc.</span>
                           <SortIcon field="spentRate" />
-                        </div>
-                      </th>
-                      <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('progressRate')}>
-                        <div className="flex items-center justify-center space-x-1">
-                          <span className="text-purple-600">Progression</span>
-                          <SortIcon field="progressRate" />
                         </div>
                       </th>
                       {canViewDetails && (
@@ -1607,11 +1677,11 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                         <td className="px-3 py-2 text-right text-sm text-gray-900 whitespace-nowrap">
                           {formatCurrency(line.engagedAmount, line.grantCurrency)}
                         </td>
-                        <td className="px-3 py-2 text-right text-sm text-blue-600 font-medium whitespace-nowrap">
+                        <td className="px-3 py-2 text-right text-sm text-indigo-600 font-medium whitespace-nowrap">
                           {formatCurrency(line.spentAmount, line.grantCurrency)}
                         </td>
-                        <td className="px-3 py-2 text-right text-sm text-purple-600 font-medium whitespace-nowrap">
-                          {line.inProgressAmount > 0 ? formatCurrency(line.inProgressAmount, line.grantCurrency) : '-'}
+                        <td className="px-3 py-2 text-right text-sm text-orange-600 font-medium whitespace-nowrap">
+                          {line.pendingPayments > 0 ? formatCurrency(line.pendingPayments, line.grantCurrency) : '-'}
                         </td>
                         <td className="px-3 py-2 text-right text-sm text-orange-600 font-medium whitespace-nowrap">
                           {line.remainingToPay > 0 ? formatCurrency(line.remainingToPay, line.grantCurrency) : '✓'}
@@ -1628,19 +1698,6 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                           <span className={`text-xs font-medium ${getEngagementColor(line.spentRate)}`}>
                             {line.spentRate.toFixed(2)}%
                           </span>
-                        </td>
-                        <td className="px-3 py-2 text-center whitespace-nowrap">
-                          <div className="flex items-center justify-center space-x-1">
-                            <div className="w-12 bg-gray-200 rounded-full h-1.5">
-                              <div 
-                                className={`h-1.5 rounded-full transition-all duration-300 ${getProgressColor(line.progressRate)}`}
-                                style={{ width: `${Math.min(line.progressRate, 100)}%` }}
-                              />
-                            </div>
-                            <span className="text-xs font-medium text-purple-600">
-                              {line.progressRate.toFixed(1)}%
-                            </span>
-                          </div>
                         </td>
                         {canViewDetails && (
                           <td className="px-3 py-2 text-center whitespace-nowrap">

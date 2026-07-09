@@ -264,7 +264,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   const canEdit = hasPermission('payments', 'edit');
   const canDelete = hasPermission('payments', 'delete');
   const canView = hasPermission('payments', 'view');
-  const canExport = hasPermission('payments', 'edit');
+  const canExport = hasPermission('payments', 'export');
 
   const userProfession = getUserProfession();
   const userFullName = getUserFullName();

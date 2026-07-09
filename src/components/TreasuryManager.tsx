@@ -1395,8 +1395,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-1 gap-6">
-        {/* Compte Bancaire */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+        {/* Compte Bancaire — placé après la section décaissement (order-2) */}
+        <div className="order-2 bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
             <h3 className="text-lg font-semibold text-gray-900">
               {selectedGrant ? 'Compte Bancaire de la Subvention' : 'Comptes Bancaires'}
@@ -1622,8 +1622,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
           </div>
         </div>
 
-        {/* Paiements Non Décaissés avec onglets et boutons de décaissement */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+        {/* Paiements à Décaisser — placé juste sous les 3 cartes, avant l'historique (order-1) */}
+        <div className="order-1 bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
               <h3 className="text-lg font-semibold text-gray-900">Paiements à Décaisser</h3>
               <div className="flex items-center gap-2">

@@ -773,7 +773,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   const canEdit = hasPermission('engagements', 'edit');
   const canDelete = hasPermission('engagements', 'delete');
   const canView = hasPermission('engagements', 'view');
-  const canExport = hasPermission('engagements', 'edit');
+  const canExport = hasPermission('engagements', 'export');
 
   const activeGrant = grants.find(grant => grant.status === 'active');
   const canCreateEngag = canCreate && activeGrant;
