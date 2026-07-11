@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { TrendingUp, Target, AlertTriangle, CheckCircle, Clock, Eye, EyeOff, ChevronDown, ChevronUp, BarChart3, PieChart, DollarSign, Calendar, FileText, Plus, Minus, Download } from 'lucide-react';
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+import { TrendingUp, Target, AlertTriangle, CheckCircle, Clock, Eye, EyeOff, ChevronDown, ChevronUp, BarChart3, PieChart, DollarSign, Calendar, FileText, Plus, Minus } from 'lucide-react';
 import { Grant, BudgetLine, SubBudgetLine, Engagement, Payment, Prefinancing, EmployeeLoan, GRANT_STATUS } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 
@@ -27,38 +25,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onNavigate
 }) => {
   const { hasPermission } = usePermissions();
-  const canExportDashboard = hasPermission('dashboard', 'export');
   const dashboardRef = useRef<HTMLDivElement>(null);
-  const [isExporting, setIsExporting] = useState(false);
-
-  const exportDashboardPDF = async () => {
-    if (!dashboardRef.current) return;
-    setIsExporting(true);
-    try {
-      const canvas = await html2canvas(dashboardRef.current, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      const imgW = pageW;
-      const imgH = (canvas.height * imgW) / canvas.width;
-      let heightLeft = imgH;
-      let position = 0;
-      pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH);
-      heightLeft -= pageH;
-      while (heightLeft > 0) {
-        position -= pageH;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH);
-        heightLeft -= pageH;
-      }
-      pdf.save(`Tableau_de_bord_${new Date().toISOString().slice(0, 10)}.pdf`);
-    } catch (e) {
-      console.error('Export tableau de bord échoué:', e);
-    } finally {
-      setIsExporting(false);
-    }
-  };
   const [showAllBudgetLines, setShowAllBudgetLines] = useState(false);
   const [showAllGrants, setShowAllGrants] = useState(false);
   const [showAllAlerts, setShowAllAlerts] = useState(false);
@@ -285,18 +252,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     <div ref={dashboardRef} className="space-y-8 pb-8">
       {/* Header avec fond gradient et texte animé */}
       <div className="relative bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-700 rounded-3xl p-6 md:p-8 text-white shadow-2xl mx-4 md:mx-0">
-        {canExportDashboard && (
-          <button
-            data-html2canvas-ignore="true"
-            onClick={exportDashboardPDF}
-            disabled={isExporting}
-            className="absolute top-4 right-4 z-10 flex items-center space-x-2 bg-amber-400 hover:bg-amber-500 text-gray-900 px-4 py-2 rounded-xl font-semibold shadow-lg transition-colors disabled:opacity-50"
-            title="Télécharger le tableau de bord en PDF"
-          >
-            <Download className="w-4 h-4" />
-            <span>{isExporting ? 'Génération...' : 'Exporter PDF'}</span>
-          </button>
-        )}
         <div className="text-center max-w-4xl mx-auto">
           <h1 className="text-2xl md:text-4xl font-bold mb-4 bg-clip-text text-transparent bg-gradient-to-r from-white to-blue-100">
             Tableau de Bord Budgétaire

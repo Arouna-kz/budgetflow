@@ -710,7 +710,7 @@ const Reports: React.FC<ReportsProps> = ({
                 new Date(eng.date).toLocaleDateString('fr-FR'),
                 eng.engagementNumber,
                 eng.description,
-                eng.amount,
+                formatAmount(eng.amount),
                 statusLabels[eng.status] || eng.status,
                 'Engagement',
                 '',
@@ -737,11 +737,11 @@ const Reports: React.FC<ReportsProps> = ({
                 new Date(payment.date).toLocaleDateString('fr-FR'),
                 payment.paymentNumber,
                 payment.description || '',
-                payment.amount,
+                formatAmount(payment.amount),
                 statusLabels[status] || status,
                 'Paiement',
-                totalPaid,
-                remaining
+                formatAmount(totalPaid),
+                formatAmount(remaining)
               ]);
               totalPayments++;
               totalAmountPaid += totalPaid;
@@ -754,11 +754,11 @@ const Reports: React.FC<ReportsProps> = ({
 
         // Ligne de total pour le fournisseur
         if (exportType === 'all') {
-          data.push(['', 'TOTAL FOURNISSEUR', '', '', supplier.totalEngaged, '', '', supplier.totalPaid, supplier.totalRemaining]);
+          data.push(['', 'TOTAL FOURNISSEUR', '', '', formatAmount(supplier.totalEngaged), '', '', formatAmount(supplier.totalPaid), formatAmount(supplier.totalRemaining)]);
         } else if (exportType === 'engagements') {
-          data.push(['', 'TOTAL FOURNISSEUR', '', '', supplier.totalEngaged, '', '', '', '']);
+          data.push(['', 'TOTAL FOURNISSEUR', '', '', formatAmount(supplier.totalEngaged), '', '', '', '']);
         } else {
-          data.push(['', 'TOTAL FOURNISSEUR', '', '', '', '', '', supplier.totalPaid, supplier.totalRemaining]);
+          data.push(['', 'TOTAL FOURNISSEUR', '', '', '', '', '', formatAmount(supplier.totalPaid), formatAmount(supplier.totalRemaining)]);
         }
         data.push([]);
       });
@@ -849,7 +849,7 @@ const Reports: React.FC<ReportsProps> = ({
             supplier.engagements.forEach(eng => {
               rows.push([
                 '', new Date(eng.date).toLocaleDateString('fr-FR'), eng.engagementNumber,
-                eng.description, eng.amount, getStatusLabel(eng.status), 'Engagement', '', ''
+                eng.description, formatAmount(eng.amount), getStatusLabel(eng.status), 'Engagement', '', ''
               ]);
               totalEngagements++;
               totalAmountEngaged += eng.amount;
@@ -868,8 +868,8 @@ const Reports: React.FC<ReportsProps> = ({
               const remaining = getRemainingAmountForPayment(payment);
               rows.push([
                 '', new Date(payment.date).toLocaleDateString('fr-FR'), payment.paymentNumber,
-                payment.description || '', payment.amount, getStatusLabel(getPaymentStatus(payment)),
-                'Paiement', totalPaid, remaining
+                payment.description || '', formatAmount(payment.amount), getStatusLabel(getPaymentStatus(payment)),
+                'Paiement', formatAmount(totalPaid), formatAmount(remaining)
               ]);
               totalPayments++;
               totalAmountPaid += totalPaid;
@@ -881,9 +881,9 @@ const Reports: React.FC<ReportsProps> = ({
         }
 
         // Total fournisseur
-        if (exportType === 'all') rows.push(['', 'TOTAL FOURNISSEUR', '', '', supplier.totalEngaged, '', '', supplier.totalPaid, supplier.totalRemaining]);
-        else if (exportType === 'engagements') rows.push(['', 'TOTAL FOURNISSEUR', '', '', supplier.totalEngaged, '', '', '', '']);
-        else rows.push(['', 'TOTAL FOURNISSEUR', '', '', '', '', '', supplier.totalPaid, supplier.totalRemaining]);
+        if (exportType === 'all') rows.push(['', 'TOTAL FOURNISSEUR', '', '', formatAmount(supplier.totalEngaged), '', '', formatAmount(supplier.totalPaid), formatAmount(supplier.totalRemaining)]);
+        else if (exportType === 'engagements') rows.push(['', 'TOTAL FOURNISSEUR', '', '', formatAmount(supplier.totalEngaged), '', '', '', '']);
+        else rows.push(['', 'TOTAL FOURNISSEUR', '', '', '', '', '', formatAmount(supplier.totalPaid), formatAmount(supplier.totalRemaining)]);
         rows.push([]);
       });
 

@@ -269,8 +269,9 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   const userProfession = getUserProfession();
   const userFullName = getUserFullName();
   const pendingSignatures = getPendingSignatures();
-  // ✅ Nombre de paiements en attente de MA signature (accès rapide)
-  const toSignCount = payments.filter(p => p.status === 'pending' && needsUserSignature(p)).length;
+  // ✅ Un paiement reste "à signer" tant que l'utilisateur ne l'a pas signé, quel que soit le statut.
+  // (Approuver/rejeter sans signer ne doit PAS retirer l'élément de la liste.)
+  const toSignCount = payments.filter(p => needsUserSignature(p)).length;
 
   // Filtrer les engagements approuvés qui n'ont pas encore de paiement
   const availableEngagements = engagements.filter(engagement => 
@@ -377,7 +378,8 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     const matchesStatus = statusFilter === 'all' || payment.status === statusFilter;
 
     // ✅ Filtre "À signer" : uniquement les paiements en attente nécessitant ma signature
-    const matchesToSign = !showOnlyToSign || (payment.status === 'pending' && needsUserSignature(payment));
+    // L'élément reste dans la liste "À signer" tant que ma signature est requise, quel que soit le statut.
+    const matchesToSign = !showOnlyToSign || needsUserSignature(payment);
 
     const matchesDateRange = !showDateRange ? true : (
       (!startDate || payment.date >= startDate) &&

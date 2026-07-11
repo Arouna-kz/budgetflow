@@ -291,7 +291,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
   const userFullName = getUserFullName();
   const pendingSignatures = getPendingSignatures();
   // ✅ Nombre de préfinancements en attente de MA signature (accès rapide)
-  const toSignCount = prefinancings.filter(p => p.status === 'pending' && needsUserSignature(p)).length;
+  // ✅ Un préfinancement reste "à signer" tant que l'utilisateur ne l'a pas signé, quel que soit le statut.
+  const toSignCount = prefinancings.filter(p => needsUserSignature(p)).length;
 
   // FONCTIONS DE RECHERCHE ET FILTRAGE
   const filteredPrefinancings = prefinancings.filter(prefinancing => {
@@ -303,7 +304,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
 
     const matchesStatus = statusFilter === 'all' || prefinancing.status === statusFilter;
     // ✅ Filtre "À signer" : uniquement les préfinancements en attente nécessitant ma signature
-    const matchesToSign = !showOnlyToSign || (prefinancing.status === 'pending' && needsUserSignature(prefinancing));
+    // L'élément reste dans la liste "À signer" tant que ma signature est requise, quel que soit le statut.
+    const matchesToSign = !showOnlyToSign || needsUserSignature(prefinancing);
     const matchesDate = !dateFilter || prefinancing.expectedRepaymentDate === dateFilter;
     const matchesPurpose = purposeFilter === 'all' || prefinancing.purpose === purposeFilter;
 
@@ -2355,7 +2357,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                       value={formData.date}
                       onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
+                      required={!editingPrefinancing}
                     />
                   </div>
 
@@ -2368,7 +2370,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                       value={formData.expectedRepaymentDate}
                       onChange={(e) => setFormData(prev => ({ ...prev, expectedRepaymentDate: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
+                      required={!editingPrefinancing}
                     />
                   </div>
                 </div>

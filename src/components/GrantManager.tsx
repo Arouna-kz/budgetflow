@@ -1226,7 +1226,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                     value={formData.startDate}
                     onChange={(e) => setFormData(prev => ({ ...prev, startDate: e.target.value }))}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
+                    required={!editingGrant}
                   />
                 </div>
 
@@ -1239,7 +1239,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                     value={formData.endDate}
                     onChange={(e) => setFormData(prev => ({ ...prev, endDate: e.target.value }))}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
+                    required={!editingGrant}
                   />
                 </div>
               </div>
