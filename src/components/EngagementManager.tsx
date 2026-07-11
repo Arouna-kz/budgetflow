@@ -442,21 +442,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   };
 
   const getPendingSignatures = (): Engagement[] => {
-    const userProfession = getUserProfession();
-
-    return engagements.filter(engagement => {
-      if (userProfession === 'Coordinateur de la Subvention') {
-        return !engagement.approvals?.supervisor1?.signature;
-      } else if (userProfession === 'Comptable') {
-        return !engagement.approvals?.supervisor2?.signature;
-      } else if (userProfession === 'Coordonnateur National') {
-        const hasSupervisor1Signed = engagement.approvals?.supervisor1?.signature;
-        const hasSupervisor2Signed = engagement.approvals?.supervisor2?.signature;
-        const hasFinalSigned = engagement.approvals?.finalApproval?.signature;
-        return hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned;
-      }
-      return false;
-    });
+    return engagements.filter(engagement => needsUserSignature(engagement));
   };
 
   const needsUserSignature = (engagement: Engagement): boolean => {
@@ -469,7 +455,12 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       const hasSupervisor1Signed = engagement.approvals?.supervisor1?.signature;
       const hasSupervisor2Signed = engagement.approvals?.supervisor2?.signature;
       const hasFinalSigned = engagement.approvals?.finalApproval?.signature;
-      return hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned;
+      // Le coordonnateur (signataire final) doit signer ET décider (approuver/rejeter).
+      // L'élément reste dans la liste "À signer" tant qu'il n'a pas fait les DEUX :
+      // il n'en disparaît qu'une fois signé ET son statut décidé (≠ 'pending'),
+      // pour lui éviter d'avoir à rechercher l'élément plus tard pour changer le statut.
+      const hasDecision = engagement.status !== 'pending';
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !(hasFinalSigned && hasDecision));
     }
     return false;
   };

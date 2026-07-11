@@ -174,7 +174,12 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
       const hasSupervisor1Signed = loan.approvals?.supervisor1?.signature;
       const hasSupervisor2Signed = loan.approvals?.supervisor2?.signature;
       const hasFinalSigned = loan.approvals?.finalApproval?.signature;
-      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned);
+      // Le coordonnateur (signataire final) doit signer ET décider (approuver/rejeter).
+      // L'élément reste dans la liste "À signer" tant qu'il n'a pas fait les DEUX :
+      // il n'en disparaît qu'une fois signé ET son statut décidé (≠ 'pending'),
+      // pour lui éviter d'avoir à rechercher l'élément plus tard pour changer le statut.
+      const hasDecision = loan.status !== 'pending';
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !(hasFinalSigned && hasDecision));
     }
     return false;
   };
