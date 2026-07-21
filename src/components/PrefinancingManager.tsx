@@ -174,7 +174,13 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
       // Reste dans « À signer » tant que c'est en attente : signe PUIS approuve/rejette.
       const hasSupervisor1Signed = prefinancing.approvals?.supervisor1?.signature;
       const hasSupervisor2Signed = prefinancing.approvals?.supervisor2?.signature;
-      return !!(hasSupervisor1Signed && hasSupervisor2Signed);
+      const hasFinalSigned = prefinancing.approvals?.finalApproval?.signature;
+      // Le coordonnateur (signataire final) doit signer ET décider (approuver/rejeter).
+      // L'élément reste dans la liste "À signer" tant qu'il n'a pas fait les DEUX :
+      // il n'en disparaît qu'une fois signé ET son statut décidé (≠ 'pending'),
+      // pour lui éviter d'avoir à rechercher l'élément plus tard pour changer le statut.
+      const hasDecision = prefinancing.status !== 'pending';
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !(hasFinalSigned && hasDecision));
     }
     return false;
   };
@@ -344,7 +350,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
   const userFullName = getUserFullName();
   const pendingSignatures = getPendingSignatures();
   // ✅ Nombre de préfinancements en attente de MA signature (accès rapide)
-  const toSignCount = prefinancings.filter(p => p.status === 'pending' && needsUserSignature(p)).length;
+  // ✅ Un préfinancement reste "à signer" tant que l'utilisateur ne l'a pas signé, quel que soit le statut.
+  const toSignCount = prefinancings.filter(p => needsUserSignature(p)).length;
 
   // FONCTIONS DE RECHERCHE ET FILTRAGE
   const filteredPrefinancings = prefinancings.filter(prefinancing => {
@@ -356,7 +363,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
 
     const matchesStatus = statusFilter === 'all' || prefinancing.status === statusFilter;
     // ✅ Filtre "À signer" : uniquement les préfinancements en attente nécessitant ma signature
-    const matchesToSign = !showOnlyToSign || (prefinancing.status === 'pending' && needsUserSignature(prefinancing));
+    // L'élément reste dans la liste "À signer" tant que ma signature est requise, quel que soit le statut.
+    const matchesToSign = !showOnlyToSign || needsUserSignature(prefinancing);
     const matchesDate = !dateFilter || prefinancing.expectedRepaymentDate === dateFilter;
     const matchesPurpose = purposeFilter === 'all' || prefinancing.purpose === purposeFilter;
 

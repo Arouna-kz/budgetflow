@@ -38,8 +38,8 @@ export class PermissionService {
       {
         module: 'dashboard',
         label: 'Tableau de Bord',
-        actions: ['view'],
-        description: 'Accès au tableau de bord principal'
+        actions: ['view', 'export'],
+        description: 'Accès au tableau de bord principal (export PDF de la page)'
       },
       {
         module: 'grants',

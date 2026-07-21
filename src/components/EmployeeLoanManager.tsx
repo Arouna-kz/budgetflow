@@ -180,7 +180,13 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
       // Reste dans « À signer » tant que c'est en attente : signe PUIS approuve/rejette.
       const hasSupervisor1Signed = loan.approvals?.supervisor1?.signature;
       const hasSupervisor2Signed = loan.approvals?.supervisor2?.signature;
-      return !!(hasSupervisor1Signed && hasSupervisor2Signed);
+      const hasFinalSigned = loan.approvals?.finalApproval?.signature;
+      // Le coordonnateur (signataire final) doit signer ET décider (approuver/rejeter).
+      // L'élément reste dans la liste "À signer" tant qu'il n'a pas fait les DEUX :
+      // il n'en disparaît qu'une fois signé ET son statut décidé (≠ 'pending'),
+      // pour lui éviter d'avoir à rechercher l'élément plus tard pour changer le statut.
+      const hasDecision = loan.status !== 'pending';
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !(hasFinalSigned && hasDecision));
     }
     return false;
   };
@@ -302,7 +308,8 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const userFullName = getUserFullName();
   const pendingSignatures = getPendingSignatures();
   // ✅ Nombre de prêts en attente de MA signature (accès rapide)
-  const toSignCount = loans.filter(l => l.status === 'pending' && needsUserSignature(l)).length;
+  // ✅ Un prêt reste "à signer" tant que l'utilisateur ne l'a pas signé, quel que soit le statut.
+  const toSignCount = loans.filter(l => needsUserSignature(l)).length;
 
   // Définir selectedGrant basé sur selectedGrantId ou la subvention la plus récente
   const selectedGrant = selectedGrantId 
@@ -834,7 +841,8 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     const matchesStatus = statusFilter === 'all' || loan.status === statusFilter;
 
     // ✅ Filtre "À signer" : uniquement les prêts en attente nécessitant ma signature
-    const matchesToSign = !showOnlyToSign || (loan.status === 'pending' && needsUserSignature(loan));
+    // L'élément reste dans la liste "À signer" tant que ma signature est requise, quel que soit le statut.
+    const matchesToSign = !showOnlyToSign || needsUserSignature(loan);
 
     return matchesSearch && matchesStatus && matchesToSign;
   });
@@ -924,7 +932,9 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   };
 
   const handleEditLoan = (loan: EmployeeLoan) => {
-    if (!canEdit) {
+    // Un signataire qui n'a pas encore signé peut toujours ouvrir le formulaire pour signer,
+    // même sans permission de modification et quel que soit le statut du prêt.
+    if (!canEdit && !needsUserSignature(loan)) {
       showWarning('Permission refusée', 'Vous n\'avez pas la permission de modifier les prêts');
       return;
     }
@@ -2742,11 +2752,11 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                                   <Plus className="w-4 h-4" />
                                 </button>
                               )}
-                              {canEdit && (
+                              {(canEdit || needsUserSignature(loan)) && (
                                 <button
                                   onClick={() => handleEditLoan(loan)}
                                   className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                  title="Modifier le prêt"
+                                  title={canEdit ? 'Modifier le prêt' : 'Signer'}
                                 >
                                   <Edit className="w-4 h-4" />
                                 </button>

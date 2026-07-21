@@ -446,21 +446,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   };
 
   const getPendingSignatures = (): Engagement[] => {
-    const userProfession = getUserProfession();
-
-    return engagements.filter(engagement => {
-      if (userProfession === 'Coordinateur de la Subvention') {
-        return !engagement.approvals?.supervisor1?.signature;
-      } else if (userProfession === 'Comptable') {
-        return !engagement.approvals?.supervisor2?.signature;
-      } else if (userProfession === 'Coordonnateur National') {
-        const hasSupervisor1Signed = engagement.approvals?.supervisor1?.signature;
-        const hasSupervisor2Signed = engagement.approvals?.supervisor2?.signature;
-        const hasFinalSigned = engagement.approvals?.finalApproval?.signature;
-        return hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned;
-      }
-      return false;
-    });
+    return engagements.filter(engagement => needsUserSignature(engagement));
   };
 
   const needsUserSignature = (engagement: Engagement): boolean => {
@@ -474,7 +460,13 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       // coordonnateur signe PUIS approuve/rejette (le filtre exige status 'pending').
       const hasSupervisor1Signed = engagement.approvals?.supervisor1?.signature;
       const hasSupervisor2Signed = engagement.approvals?.supervisor2?.signature;
-      return !!(hasSupervisor1Signed && hasSupervisor2Signed);
+      const hasFinalSigned = engagement.approvals?.finalApproval?.signature;
+      // Le coordonnateur (signataire final) doit signer ET décider (approuver/rejeter).
+      // L'élément reste dans la liste "À signer" tant qu'il n'a pas fait les DEUX :
+      // il n'en disparaît qu'une fois signé ET son statut décidé (≠ 'pending'),
+      // pour lui éviter d'avoir à rechercher l'élément plus tard pour changer le statut.
+      const hasDecision = engagement.status !== 'pending';
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !(hasFinalSigned && hasDecision));
     }
     return false;
   };
@@ -774,7 +766,9 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
   // ✅ Utilisateur signataire + nombre d'engagements en attente de SA signature
   const isSignatory = ['Coordinateur de la Subvention', 'Comptable', 'Coordonnateur National'].includes(userProfession);
-  const toSignCount = engagements.filter(e => e.status === 'pending' && needsUserSignature(e)).length;
+  // ✅ Un élément reste "à signer" tant que l'utilisateur ne l'a pas signé, quel que soit le statut.
+  // (Approuver/rejeter sans signer ne doit PAS retirer l'élément de la liste.)
+  const toSignCount = engagements.filter(e => needsUserSignature(e)).length;
 
   // 🚨 GESTIONNAIRES D'ÉVÉNEMENTS
 
@@ -1064,7 +1058,9 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   };
 
   const startEdit = (engagement: Engagement) => {
-    if (!canEdit) {
+    // Un signataire qui n'a pas encore signé peut toujours ouvrir le formulaire pour signer,
+    // même sans permission de modification et quel que soit le statut de l'engagement.
+    if (!canEdit && !needsUserSignature(engagement)) {
       showWarning('Permission refusée', 'Vous n\'avez pas la permission de modifier des engagements');
       return;
     }
@@ -1242,8 +1238,9 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
       const matchesStatus = statusFilter === 'all' || engagement.status === statusFilter;
 
-      // ✅ Filtre "À signer" : uniquement les engagements en attente nécessitant ma signature
-      const matchesToSign = !showOnlyToSign || (engagement.status === 'pending' && needsUserSignature(engagement));
+      // ✅ Filtre "À signer" : l'engagement reste dans la liste tant que ma signature est requise,
+      // quel que soit son statut. Il n'en disparaît qu'une fois signé (approuver/rejeter ne suffit pas).
+      const matchesToSign = !showOnlyToSign || needsUserSignature(engagement);
 
       const matchesDateRange = !showDateRange ? true : (
         (!startDate || engagement.date >= startDate) &&
@@ -2239,7 +2236,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                 value={formData.date}
                 onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                required
+                required={!editingEngagement}
               />
             </div>
         </div>
@@ -3298,11 +3295,11 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                         </td>
                         <td className="px-4 py-4 text-center">
                           <div className="flex items-center justify-center space-x-1">
-                            {canEdit && (
+                            {(canEdit || needsUserSignature(engagement)) && (
                               <button
                                 onClick={() => startEdit(engagement)}
                                 className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                title="Modifier"
+                                title={canEdit ? 'Modifier' : 'Signer'}
                               >
                                 <Edit className="w-4 h-4" />
                               </button>

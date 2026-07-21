@@ -1248,13 +1248,6 @@ export default function PaymentForm({
                     </div>
                   )}
                   
-                  {approvals.supervisor1.signature && (
-                    <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
-                      <p className="text-xs text-green-700">
-                        ✅ Prêt à être signé avec le paiement
-                      </p>
-                    </div>
-                  )}
                 </div>
 
                 {/* Comptable */}
@@ -1338,13 +1331,6 @@ export default function PaymentForm({
                     </div>
                   )}
                   
-                  {approvals.supervisor2.signature && (
-                    <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
-                      <p className="text-xs text-green-700">
-                        ✅ Prêt à être signé avec le paiement
-                      </p>
-                    </div>
-                  )}
                 </div>
 
                 {/* Coordonnateur National */}

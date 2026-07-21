@@ -19,7 +19,8 @@ import {
   Clock,
   DollarSign,
   FileText,
-  Wallet
+  Wallet,
+  Eye
 } from 'lucide-react';
 import { showSuccess, showValidationError, showError, showWarning } from '../utils/alerts';
 import { Payment, BankTransaction, PAYMENT_STATUS, Grant, PartialPayment, Attachment } from '../types';
@@ -89,6 +90,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
   
   // État pour le paiement sélectionné
   const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
+  // État pour l'affichage du détail d'un paiement à décaisser
+  const [showPaymentDetails, setShowPaymentDetails] = useState(false);
   
   // Vérification des permissions
   const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
@@ -1762,6 +1765,15 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                           )}
                         </div>
                         <div className="flex flex-col sm:flex-row gap-2">
+                          {/* Voir le détail du paiement (disponible dans les deux onglets, pour tous les paiements) */}
+                          <button
+                            onClick={() => { setSelectedPayment(payment); setShowPaymentDetails(true); }}
+                            className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium flex items-center space-x-1 whitespace-nowrap"
+                            title="Voir le détail du paiement"
+                          >
+                            <Eye className="w-4 h-4" />
+                            <span>Voir détail</span>
+                          </button>
                           {canCreateTreasury && remaining > 0 && (
                             <>
                               {/* Afficher "Décaisser complet" uniquement dans l'onglet "Approuvés" */}
@@ -1799,6 +1811,132 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       {/* ============================================ */}
       {/* MODAL - PAIEMENT ÉCHELONNÉ (AVEC CHOIX DU MODE) */}
       {/* ============================================ */}
+      {/* Modal de détail d'un paiement à décaisser */}
+      {showPaymentDetails && selectedPayment && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 my-8 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Détail du paiement
+                </h3>
+                <p className="text-sm text-blue-600 mt-1">
+                  {selectedPayment.paymentNumber} - {selectedPayment.supplier}
+                </p>
+              </div>
+              <button
+                onClick={() => { setShowPaymentDetails(false); setSelectedPayment(null); }}
+                className="p-2 hover:bg-gray-100 rounded-full"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            {/* Résumé montants */}
+            <div className="bg-orange-50 rounded-lg p-4 border border-orange-200 mb-4">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600">Montant total:</span>
+                <span className="font-bold">{formatCurrency(selectedPayment.amount)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600">Déjà payé:</span>
+                <span className="font-bold text-green-600">{formatCurrency(getTotalPaid(selectedPayment))}</span>
+              </div>
+              <div className="flex justify-between text-sm font-medium border-t pt-2 mt-2">
+                <span className="text-gray-700">Reste à payer:</span>
+                <span className="font-bold text-orange-600">{formatCurrency(getRemainingAmount(selectedPayment))}</span>
+              </div>
+            </div>
+
+            {/* Informations générales */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div>
+                <span className="block text-gray-500">Statut</span>
+                <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${PAYMENT_STATUS[selectedPayment.status].color}`}>
+                  {PAYMENT_STATUS[selectedPayment.status].label}
+                </span>
+              </div>
+              <div>
+                <span className="block text-gray-500">Date d'émission</span>
+                <span className="text-gray-900 font-medium">{formatDate(selectedPayment.date)}</span>
+              </div>
+              <div>
+                <span className="block text-gray-500">Fournisseur</span>
+                <span className="text-gray-900 font-medium">{selectedPayment.supplier}</span>
+              </div>
+              <div>
+                <span className="block text-gray-500">Mode de paiement</span>
+                <span className="text-gray-900 font-medium">{getPaymentMethodLabel(selectedPayment.paymentMethod)}</span>
+              </div>
+              {selectedPayment.checkNumber && (
+                <div>
+                  <span className="block text-gray-500">N° de chèque</span>
+                  <span className="text-gray-900 font-medium">{selectedPayment.checkNumber}</span>
+                </div>
+              )}
+              {selectedPayment.bankReference && (
+                <div>
+                  <span className="block text-gray-500">Référence bancaire</span>
+                  <span className="text-gray-900 font-medium">{selectedPayment.bankReference}</span>
+                </div>
+              )}
+              {selectedPayment.invoiceNumber && (
+                <div>
+                  <span className="block text-gray-500">N° de facture</span>
+                  <span className="text-gray-900 font-medium">{selectedPayment.invoiceNumber}</span>
+                </div>
+              )}
+              {selectedPayment.quoteReference && (
+                <div>
+                  <span className="block text-gray-500">Référence devis</span>
+                  <span className="text-gray-900 font-medium">{selectedPayment.quoteReference}</span>
+                </div>
+              )}
+              {selectedPayment.purchaseOrderNumber && (
+                <div>
+                  <span className="block text-gray-500">N° bon de commande</span>
+                  <span className="text-gray-900 font-medium">{selectedPayment.purchaseOrderNumber}</span>
+                </div>
+              )}
+            </div>
+
+            {selectedPayment.description && (
+              <div className="mt-4 text-sm">
+                <span className="block text-gray-500 mb-1">Description</span>
+                <p className="text-gray-900 bg-gray-50 rounded-lg p-3 border border-gray-200">{selectedPayment.description}</p>
+              </div>
+            )}
+
+            {/* Historique des paiements partiels */}
+            {selectedPayment.partialPayments && selectedPayment.partialPayments.length > 0 && (
+              <div className="mt-4">
+                <h4 className="text-sm font-semibold text-gray-900 mb-2">Historique des décaissements</h4>
+                <div className="space-y-2">
+                  {selectedPayment.partialPayments.map((pp, idx) => (
+                    <div key={pp.id || idx} className="flex justify-between items-center text-sm bg-gray-50 rounded-lg p-3 border border-gray-200">
+                      <div>
+                        <span className="text-gray-900 font-medium">{formatDate(pp.date)}</span>
+                        {pp.reference && <span className="text-gray-500 ml-2">Réf: {pp.reference}</span>}
+                      </div>
+                      <span className="font-bold text-green-600">{formatCurrency(pp.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => { setShowPaymentDetails(false); setSelectedPayment(null); }}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showPartialPaymentForm && selectedPayment && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 my-8 max-h-[90vh] overflow-y-auto">
