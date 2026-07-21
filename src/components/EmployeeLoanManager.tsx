@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Edit, Trash2, Users, Calendar, AlertTriangle, DollarSign, CheckCircle, Clock, Download, Printer, X, Search, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, AlertCircle, FileText, Eye } from 'lucide-react';
-import { showSuccess, showValidationError, showWarning } from '../utils/alerts';
-import { EmployeeLoan, BudgetLine, Grant, LOAN_STATUS, SubBudgetLine, Payment } from '../types';
+import { showSuccess, showValidationError, showWarning, confirmDelete } from '../utils/alerts';
+import { EmployeeLoan, BudgetLine, Grant, LOAN_STATUS, SubBudgetLine, Payment, Attachment } from '../types';
+import { FileUploader, AttachmentList } from './AttachmentUploader';
+import { deleteAttachment } from '../services/storageService';
+import { exportListPDF, exportListExcel, fmtAmount } from '../utils/listExport';
 import { usePermissions } from '../hooks/usePermissions';
 import { useAuth } from '../hooks/useAuth';
 import html2canvas from 'html2canvas';
@@ -18,6 +21,7 @@ interface EmployeeLoanManagerProps {
   onAddLoan: (loan: Omit<EmployeeLoan, 'id'>) => void;
   onUpdateLoan: (id: string, updates: Partial<EmployeeLoan>) => void;
   onAddRepayment: (loanId: string, repayment: { date: string; amount: number; reference: string }) => void;
+  onDeleteLoan?: (id: string) => void;
 }
 
 const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
@@ -29,7 +33,8 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   payments,
   onAddLoan,
   onUpdateLoan,
-  onAddRepayment
+  onAddRepayment,
+  onDeleteLoan
 }) => {
   // HOOKS D'AUTHENTIFICATION ET PERMISSIONS
   const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
@@ -44,6 +49,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedLoan, setSelectedLoan] = useState<EmployeeLoan | null>(null);
   const [editingLoan, setEditingLoan] = useState<EmployeeLoan | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   
   // États pour le tri et la pagination
@@ -171,10 +177,10 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     } else if (userProfession === 'Comptable') {
       return !loan.approvals?.supervisor2?.signature;
     } else if (userProfession === 'Coordonnateur National') {
+      // Reste dans « À signer » tant que c'est en attente : signe PUIS approuve/rejette.
       const hasSupervisor1Signed = loan.approvals?.supervisor1?.signature;
       const hasSupervisor2Signed = loan.approvals?.supervisor2?.signature;
-      const hasFinalSigned = loan.approvals?.finalApproval?.signature;
-      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned);
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed);
     }
     return false;
   };
@@ -219,6 +225,72 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const canEdit = hasPermission('employee_loans', 'edit');
   const canDelete = hasPermission('employee_loans', 'delete');
   const canView = hasPermission('employee_loans', 'view');
+  const canExport = hasPermission('employee_loans', 'export') || canEdit;
+
+  // Suppression d'un prêt — uniquement si le statut est « En attente »
+  const handleDeleteLoan = async (loan: EmployeeLoan) => {
+    if (loan.status !== 'pending') {
+      showWarning('Suppression impossible', 'Seuls les prêts en attente peuvent être supprimés.');
+      return;
+    }
+    if (!canDelete) {
+      showWarning('Permission refusée', 'Vous n\'avez pas la permission de supprimer des prêts.');
+      return;
+    }
+    const confirmed = await confirmDelete(
+      'Supprimer le prêt',
+      `Êtes-vous sûr de vouloir supprimer le prêt ${loan.loanNumber} ? Cette action est irréversible.`
+    );
+    if (confirmed && onDeleteLoan) {
+      onDeleteLoan(loan.id);
+    }
+  };
+
+  // Exports de la liste des prêts employés
+  const exportLoansRows = () => sortedLoans.map(l => [
+    l.loanNumber,
+    new Date(l.date).toLocaleDateString('fr-FR'),
+    l.employee?.name || '',
+    l.employee?.employeeId || '',
+    fmtAmount(l.amount),
+    fmtAmount(getTotalRepaid(l)),
+    fmtAmount(getRemainingAmount(l)),
+    LOAN_STATUS[l.status]?.label || l.status,
+  ]);
+  const exportLoansTotal = () => {
+    const amt = sortedLoans.reduce((s, l) => s + l.amount, 0);
+    const rep = sortedLoans.reduce((s, l) => s + getTotalRepaid(l), 0);
+    const rem = sortedLoans.reduce((s, l) => s + getRemainingAmount(l), 0);
+    return ['TOTAUX', '', '', '', fmtAmount(amt), fmtAmount(rep), fmtAmount(rem), ''];
+  };
+  const exportLoansExcel = () => {
+    exportListExcel({
+      title: 'LISTE DES PRÊTS AUX EMPLOYÉS',
+      subtitle: `${activeGrant?.name || ''} — Généré le ${new Date().toLocaleDateString('fr-FR')}`,
+      headers: ['N°', 'Date', 'Employé', 'Matricule', 'Montant', 'Remboursé', 'Reste', 'Statut'],
+      rows: exportLoansRows(),
+      totalRow: exportLoansTotal(),
+      colWidths: [18, 14, 28, 16, 16, 16, 16, 14],
+      sheetName: 'Prêts employés',
+      filename: `prets-employes-${new Date().toISOString().split('T')[0]}.xlsx`,
+    });
+    showSuccess('Export réussi', 'La liste des prêts a été exportée.');
+  };
+  const exportLoansPDF = () => {
+    exportListPDF({
+      title: 'Liste des prêts aux employés',
+      subtitle: `${activeGrant?.name || ''} — Généré le ${new Date().toLocaleDateString('fr-FR')}`,
+      columns: [
+        { label: 'N°', width: 24 }, { label: 'Date', width: 20 }, { label: 'Employé', width: 34 },
+        { label: 'Matricule', width: 22 }, { label: 'Montant', width: 24, align: 'right' },
+        { label: 'Remboursé', width: 24, align: 'right' }, { label: 'Reste', width: 24, align: 'right' }, { label: 'Statut', width: 20 },
+      ],
+      rows: exportLoansRows(),
+      totalRow: exportLoansTotal(),
+      filename: `prets-employes-${new Date().toISOString().split('T')[0]}.pdf`,
+    });
+    showSuccess('Export réussi', 'La liste des prêts a été exportée.');
+  };
   // const canApprove = hasPermission('employee_loans', 'edit');
 
   // Vérifier si la subvention sélectionnée est active
@@ -836,6 +908,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
       supervisor2: false,
       finalApproval: false
     });
+    setAttachments([]);
     setShowForm(false);
     setEditingLoan(null);
   };
@@ -857,6 +930,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     }
 
     setEditingLoan(loan);
+    setAttachments(loan.attachments || []);
     setFormData({
       grantId: loan.grantId,
       budgetLineId: loan.budgetLineId || '',
@@ -1020,8 +1094,9 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
         subBudgetLineId: formData.subBudgetLineId || undefined,
         amount: parseFloat(formData.amount),
         description: formData.description,
-        date: formData.date,
-        expectedRepaymentDate: formData.expectedRepaymentDate,
+        // Ne pas écraser les dates existantes si les champs sont laissés vides en modification
+        date: formData.date || editingLoan.date,
+        expectedRepaymentDate: formData.expectedRepaymentDate || editingLoan.expectedRepaymentDate,
         employee: {
           name: formData.employeeName,
           employeeId: formData.employeeId
@@ -1050,7 +1125,8 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
             signature: approvals.finalApproval.signature,
             observation: approvals.finalApproval.observation
           } : undefined
-        }
+        },
+        attachments
       };
 
       onUpdateLoan(editingLoan.id, updates);
@@ -1100,7 +1176,8 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
           signature: approvals.finalApproval.signature,
           observation: approvals.finalApproval.observation
         } : undefined
-      }
+      },
+      attachments
     };
 
     onAddLoan(loan);
@@ -1210,6 +1287,16 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
             </button>
           )}
           
+          {canExport && sortedLoans.length > 0 && (
+            <>
+              <button onClick={exportLoansPDF} className="bg-red-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-red-700 flex items-center space-x-2">
+                <Download className="w-4 h-4" /><span>PDF</span>
+              </button>
+              <button onClick={exportLoansExcel} className="bg-green-700 text-white px-4 py-2 rounded-xl font-medium hover:bg-green-800 flex items-center space-x-2">
+                <Download className="w-4 h-4" /><span>Excel</span>
+              </button>
+            </>
+          )}
           {canCreate && (
             <button
               onClick={() => setShowForm(true)}
@@ -1604,28 +1691,30 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Date *
+                      Date {!editingLoan && '*'}
                     </label>
                     <input
                       type="date"
                       value={formData.date}
                       onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
+                      required={!editingLoan}
                     />
+                    {editingLoan && <p className="text-xs text-gray-400 mt-1">Laissez vide pour conserver la date actuelle.</p>}
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Date prévisionnelle de remboursement*
+                      Date prévisionnelle de remboursement {!editingLoan && '*'}
                     </label>
                     <input
                       type="date"
                       value={formData.expectedRepaymentDate}
                       onChange={(e) => setFormData(prev => ({ ...prev, expectedRepaymentDate: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
+                      required={!editingLoan}
                     />
+                    {editingLoan && <p className="text-xs text-gray-400 mt-1">Laissez vide pour conserver la date actuelle.</p>}
                   </div>
                 </div>
 
@@ -1909,6 +1998,17 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                 </div>
               )}
 
+              {/* Documents physiques liés au prêt */}
+              <div className="bg-gray-50 rounded-xl p-6">
+                <FileUploader
+                  value={attachments}
+                  onChange={setAttachments}
+                  folder="loans"
+                  label="Documents physiques (optionnel)"
+                  canRemove={editingLoan ? (canDelete && editingLoan.status === 'pending') : true}
+                />
+              </div>
+
               {/* Actions */}
               <div className="flex space-x-4 pt-6">
                 <button
@@ -2167,6 +2267,22 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                 <h4 className="text-lg font-semibold text-gray-900 mb-4">Description</h4>
                 <p className="text-gray-700 whitespace-pre-wrap">{selectedLoan.description}</p>
               </div>
+
+              {/* Documents physiques associés */}
+              {selectedLoan.attachments && selectedLoan.attachments.length > 0 && (
+                <div className="bg-white border border-gray-200 rounded-xl p-4">
+                  <AttachmentList
+                    attachments={selectedLoan.attachments}
+                    title="Documents associés"
+                    onDelete={(canDelete && selectedLoan.status === 'pending') ? (att) => {
+                      const updated = (selectedLoan.attachments || []).filter(a => a.id !== att.id);
+                      onUpdateLoan(selectedLoan.id, { attachments: updated });
+                      setSelectedLoan({ ...selectedLoan, attachments: updated });
+                      deleteAttachment(att.path);
+                    } : undefined}
+                  />
+                </div>
+              )}
 
               {/* Historique des Remboursements */}
               <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
@@ -2627,12 +2743,21 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                                 </button>
                               )}
                               {canEdit && (
-                                <button 
+                                <button
                                   onClick={() => handleEditLoan(loan)}
                                   className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                                   title="Modifier le prêt"
                                 >
                                   <Edit className="w-4 h-4" />
+                                </button>
+                              )}
+                              {loan.status === 'pending' && canDelete && onDeleteLoan && (
+                                <button
+                                  onClick={() => handleDeleteLoan(loan)}
+                                  className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Supprimer (uniquement en attente)"
+                                >
+                                  <Trash2 className="w-4 h-4" />
                                 </button>
                               )}
                             </div>

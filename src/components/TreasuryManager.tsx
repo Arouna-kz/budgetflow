@@ -22,7 +22,8 @@ import {
   Wallet
 } from 'lucide-react';
 import { showSuccess, showValidationError, showError, showWarning } from '../utils/alerts';
-import { Payment, BankTransaction, PAYMENT_STATUS, Grant, PartialPayment } from '../types';
+import { Payment, BankTransaction, PAYMENT_STATUS, Grant, PartialPayment, Attachment } from '../types';
+import { FileUploader } from './AttachmentUploader';
 import { usePermissions } from '../hooks/usePermissions';
 import jsPDF from 'jspdf';
 
@@ -69,6 +70,7 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
   const [showTransactionForm, setShowTransactionForm] = useState(false);
   const [showAllTransactions, setShowAllTransactions] = useState(false);
   const [showPartialPaymentForm, setShowPartialPaymentForm] = useState(false);
+  const [partialAttachments, setPartialAttachments] = useState<Attachment[]>([]);
   
   // États pour la pagination et le tri
   const [currentPage, setCurrentPage] = useState(1);
@@ -334,7 +336,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       paymentMethod: partialPaymentFormData.paymentMethod,
       checkNumber: partialPaymentFormData.paymentMethod === 'check' ? partialPaymentFormData.checkNumber : undefined,
       bankReference: partialPaymentFormData.paymentMethod === 'transfer' ? partialPaymentFormData.bankReference : undefined,
-      reference: partialPaymentFormData.reference
+      reference: partialPaymentFormData.reference,
+      attachments: partialAttachments
     };
 
     // Construire le nouveau tableau de paiements partiels
@@ -496,6 +499,7 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       description: ''
     });
     setSelectedPayment(null);
+    setPartialAttachments([]);
     setShowPartialPaymentForm(false);
   };
 
@@ -1395,8 +1399,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-1 gap-6">
-        {/* Compte Bancaire */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+        {/* Compte Bancaire — placé après la section décaissement (order-2) */}
+        <div className="order-2 bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
             <h3 className="text-lg font-semibold text-gray-900">
               {selectedGrant ? 'Compte Bancaire de la Subvention' : 'Comptes Bancaires'}
@@ -1622,8 +1626,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
           </div>
         </div>
 
-        {/* Paiements Non Décaissés avec onglets et boutons de décaissement */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+        {/* Paiements à Décaisser — placé juste sous les 3 cartes, avant l'historique (order-1) */}
+        <div className="order-1 bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
               <h3 className="text-lg font-semibold text-gray-900">Paiements à Décaisser</h3>
               <div className="flex items-center gap-2">
@@ -1954,6 +1958,14 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                   placeholder="Description de ce paiement partiel..."
                 />
               </div>
+
+              {/* Fichier associé à ce versement échelonné */}
+              <FileUploader
+                value={partialAttachments}
+                onChange={setPartialAttachments}
+                folder="payments/partial"
+                label="Fichier associé à ce versement (optionnel)"
+              />
 
               <div className="flex flex-col sm:flex-row gap-3 pt-4">
                 <button

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, CreditCard, User, CheckCircle, AlertTriangle, FileText, Truck, Download, ChevronUp, ChevronDown } from 'lucide-react';
 import { showValidationError, showSuccess, showWarning } from '../utils/alerts';
-import { BudgetLine, SubBudgetLine, Grant, Engagement, Payment } from '../types';
+import { BudgetLine, SubBudgetLine, Grant, Engagement, Payment, Attachment } from '../types';
+import { FileUploader } from './AttachmentUploader';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { useAuth } from '../hooks/useAuth';
@@ -35,6 +36,7 @@ export default function PaymentForm({
   const [currentUserName, setCurrentUserName] = useState('');
   const [currentUserProfession, setCurrentUserProfession] = useState('');
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const currency = grant.currency || 'EUR';
 
   // HOOKS D'AUTHENTIFICATION ET PERMISSIONS
@@ -80,6 +82,7 @@ export default function PaymentForm({
 
   const canCreate = hasPermission('payments', 'create');
   const canEdit = hasPermission('payments', 'edit');
+  const canDelete = hasPermission('payments', 'delete');
 
   // Fonctions pour gérer les signatures
   const canViewSignatureSection = (): boolean => {
@@ -221,7 +224,8 @@ export default function PaymentForm({
         serviceAcceptance: editingPayment.serviceAcceptance || false,
         controlNotes: editingPayment.controlNotes || '',
       });
-      
+      setAttachments(editingPayment.attachments || []);
+
       if (editingPayment.approvals) {
         setApprovals({
           supervisor1: editingPayment.approvals.supervisor1 || { name: '', signature: false, observation: '' },
@@ -303,9 +307,26 @@ export default function PaymentForm({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!validateForm()) {
       return;
+    }
+
+    // ✅ Unicité du numéro de facture (évite les confusions entre fiches de paiement)
+    const invoice = (formData.invoiceNumber || '').trim();
+    if (invoice) {
+      const duplicate = existingPayments.find(p =>
+        p.invoiceNumber &&
+        p.invoiceNumber.trim().toLowerCase() === invoice.toLowerCase() &&
+        (!editingPayment || p.id !== editingPayment.id)
+      );
+      if (duplicate) {
+        showValidationError(
+          'Numéro de facture déjà utilisé',
+          `Le numéro de facture « ${invoice} » est déjà utilisé par le paiement ${duplicate.paymentNumber} (${duplicate.supplier || ''}). Veuillez saisir un numéro de facture unique.`
+        );
+        return;
+      }
     }
 
     // 🎯 MODIFICATION IMPORTANTE : Préparation des données d'approbation
@@ -351,7 +372,8 @@ export default function PaymentForm({
       subBudgetLineId: subBudgetLine.id,
       amount: parseFloat(formData.amount),
       description: formData.description,
-      date: formData.date,
+      // Ne pas écraser la date existante si le champ est laissé vide en modification
+      date: formData.date || editingPayment?.date || '',
       supplier: engagement.supplier || '',
       paymentMethod: formData.paymentMethod,
       checkNumber: formData.checkNumber || undefined,
@@ -365,7 +387,8 @@ export default function PaymentForm({
       controlNotes: formData.controlNotes || undefined,
       // ✅ Préserver le statut existant en modification ; "pending" seulement à la création
       status: editingPayment ? editingPayment.status : 'pending',
-      approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined
+      approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined,
+      attachments
     };
 
     onSave(payment);
@@ -381,7 +404,18 @@ export default function PaymentForm({
   const totalUncashedAmount = totalUncashedPayments.reduce((sum, p) => sum + p.amount, 0);
   const availableBeforePayment = totalBankBalance - totalUncashedAmount;
   const balanceAfterPayment = availableBeforePayment - parseFloat(formData.amount || '0');
-  
+
+  // Droit de SOUMISSION de la modification :
+  // - si le paiement est encore « En attente » : tout utilisateur ayant le rôle Modifier peut soumettre
+  // - sinon (approuvé/rejeté/en cours/payé) : réservé au Comptable
+  const isComptableUser = currentUserProfession === 'Comptable';
+  const canEditPayments = hasPermission('payments', 'edit');
+  const editStatusPending = editingPayment?.status === 'pending';
+  const canSubmitPayment = !editingPayment
+    ? true
+    : (editStatusPending ? canEditPayments : isComptableUser);
+
+
   // Calculs sur la ligne budgétaire
   const linePayments = existingPayments.filter(p => p.subBudgetLineId === subBudgetLine.id && p.status === 'paid');
   const totalPaidOnLine = linePayments.reduce((sum, p) => sum + p.amount, 0);
@@ -913,15 +947,16 @@ export default function PaymentForm({
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Date de Paiement *
+                  Date de Paiement {!editingPayment && '*'}
                 </label>
                 <input
                   type="date"
                   value={formData.date}
                   onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  required
+                  required={!editingPayment}
                 />
+                {editingPayment && <p className="text-xs text-gray-400 mt-1">Laissez vide pour conserver la date actuelle.</p>}
               </div>
             </div>
 
@@ -1419,6 +1454,17 @@ export default function PaymentForm({
             </div>
           )}
 
+          {/* Documents physiques (fiche de paiement signée, justificatifs…) */}
+          <div className="bg-gray-50 rounded-xl p-6">
+            <FileUploader
+              value={attachments}
+              onChange={setAttachments}
+              folder="payments"
+              label="Fiche de paiement physique / justificatifs (optionnel)"
+              canRemove={editingPayment ? (canDelete && editingPayment.status === 'pending') : true}
+            />
+          </div>
+
           {/* Actions */}
           <div className="flex space-x-4 pt-6">
             <button
@@ -1431,20 +1477,20 @@ export default function PaymentForm({
 
             <button
               type="submit"
-              disabled={editingPayment && currentUserProfession !== 'Comptable' || balanceAfterPayment < 0}
+              disabled={!canSubmitPayment || balanceAfterPayment < 0}
               className={`flex-1 px-6 py-3 rounded-xl font-medium transition-all duration-200 flex items-center justify-center space-x-2 ${
-                (editingPayment && currentUserProfession !== 'Comptable') || balanceAfterPayment < 0
+                !canSubmitPayment || balanceAfterPayment < 0
                   ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   : 'bg-gradient-to-r from-green-600 to-blue-600 text-white hover:shadow-lg transform hover:scale-[1.02]'
               }`}
             >
               <Save className="w-5 h-5" />
               <span>
-                {editingPayment ? (
-                  currentUserProfession === 'Comptable' 
-                    ? 'Modifier le Paiement' 
-                    : 'Modification réservée au comptable'
-                ) : 'Enregistrer le Paiement'}
+                {!editingPayment
+                  ? 'Enregistrer le Paiement'
+                  : canSubmitPayment
+                    ? 'Modifier le Paiement'
+                    : 'Modification réservée au comptable'}
               </span>
             </button>
 

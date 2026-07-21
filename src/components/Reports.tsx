@@ -4,11 +4,14 @@ import {
   Eye, X, Menu, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Search, CheckSquare, 
   Square, User, AlertCircle, CheckCircle, Clock, ArrowUpDown, Plus, Minus
 } from 'lucide-react';
-import { Grant, BudgetLine, Engagement, Payment, EmployeeLoan, Prefinancing, DEFAULT_BUDGET_LINES, PAYMENT_STATUS, ENGAGEMENT_STATUS } from '../types';
+import { Grant, BudgetLine, Engagement, Payment, EmployeeLoan, Prefinancing, NotificationTranche, DEFAULT_BUDGET_LINES, PAYMENT_STATUS, ENGAGEMENT_STATUS } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 import { showSuccess, showError } from '../utils/alerts';
 import jsPDF from 'jspdf';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
+import { styleTitle, styleHeaderRow, styleTotalRow, styleSectionRow } from '../utils/excelStyle';
+import EvolutionChart from './EvolutionChart';
+import AccountingExport from './AccountingExport';
 
 interface ReportsProps {
   grants: Grant[];
@@ -18,6 +21,7 @@ interface ReportsProps {
   payments?: Payment[];
   employeeLoans?: EmployeeLoan[];
   prefinancings?: Prefinancing[];
+  notificationTranches?: NotificationTranche[];
 }
 
 type SortField = 'date' | 'description' | 'amount' | 'status' | 'supplier' | 'engagementsCount' | 'totalEngaged' | 'totalPaid' | 'totalPending' | 'totalRejected';
@@ -123,16 +127,17 @@ const Reports: React.FC<ReportsProps> = ({
   grants, 
   budgetLines, 
   subBudgetLines,
-  expenses, 
-  payments = [], 
-  employeeLoans = [], 
-  prefinancings = [] 
+  expenses,
+  payments = [],
+  employeeLoans = [],
+  prefinancings = [],
+  notificationTranches = []
 }) => {
   // === HOOKS DE BASE ===
   const [selectedPeriod, setSelectedPeriod] = useState<string>('all');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
-  const [reportType, setReportType] = useState<'summary' | 'detailed' | 'beneficiaries' | 'supplier-detail'>('summary');
+  const [reportType, setReportType] = useState<'summary' | 'detailed' | 'beneficiaries' | 'supplier-detail' | 'evolution' | 'accounting'>('summary');
   const [isMobileView, setIsMobileView] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   
@@ -825,21 +830,25 @@ const Reports: React.FC<ReportsProps> = ({
     try {
       const wb = XLSX.utils.book_new();
       const rows: any[] = [];
-      
+      // Montants formatés avec séparateur d'espace (ex: 2000 -> "2 000")
+      const xf = (n: number) => (Number(n) || 0).toLocaleString('fr-FR', { maximumFractionDigits: 2 }).replace(/ | /g, ' ');
+
       rows.push(['RAPPORT DÉTAILLÉ PAR FOURNISSEUR']);
       rows.push(['']);
       rows.push([`Subvention: ${selectedGrant?.name || 'N/A'}`]);
       rows.push([`Période: ${getPeriodDisplayText()}`]);
       rows.push([`Généré le: ${new Date().toLocaleDateString('fr-FR')}`]);
       rows.push(['']);
+      const headerRowIdx = rows.length;
       rows.push(['Fournisseur', 'Date', 'N°', 'Description', 'Montant', 'Statut', 'Type', 'Payé', 'Reste']);
-      rows.push(['---', '---', '---', '---', '---', '---', '---', '---', '---']);
+      const sectionRowIdxs: number[] = [];
       
       let totalEngagements = 0, totalPayments = 0, totalAmountEngaged = 0, totalAmountPaid = 0, totalRemaining = 0;
       let supplierIndex = 0;
 
       suppliers.forEach((supplier) => {
         supplierIndex++;
+        sectionRowIdxs.push(rows.length);
         rows.push([`${supplierIndex}. ${supplier.name}`, '', '', '', '', '', '', '', '']);
         
         // ✅ PARTIE ENGAGEMENTS
@@ -849,7 +858,7 @@ const Reports: React.FC<ReportsProps> = ({
             supplier.engagements.forEach(eng => {
               rows.push([
                 '', new Date(eng.date).toLocaleDateString('fr-FR'), eng.engagementNumber,
-                eng.description, eng.amount, getStatusLabel(eng.status), 'Engagement', '', ''
+                eng.description, xf(eng.amount), getStatusLabel(eng.status), 'Engagement', '', ''
               ]);
               totalEngagements++;
               totalAmountEngaged += eng.amount;
@@ -868,8 +877,8 @@ const Reports: React.FC<ReportsProps> = ({
               const remaining = getRemainingAmountForPayment(payment);
               rows.push([
                 '', new Date(payment.date).toLocaleDateString('fr-FR'), payment.paymentNumber,
-                payment.description || '', payment.amount, getStatusLabel(getPaymentStatus(payment)),
-                'Paiement', totalPaid, remaining
+                payment.description || '', xf(payment.amount), getStatusLabel(getPaymentStatus(payment)),
+                'Paiement', xf(totalPaid), xf(remaining)
               ]);
               totalPayments++;
               totalAmountPaid += totalPaid;
@@ -881,19 +890,31 @@ const Reports: React.FC<ReportsProps> = ({
         }
 
         // Total fournisseur
-        if (exportType === 'all') rows.push(['', 'TOTAL FOURNISSEUR', '', '', supplier.totalEngaged, '', '', supplier.totalPaid, supplier.totalRemaining]);
-        else if (exportType === 'engagements') rows.push(['', 'TOTAL FOURNISSEUR', '', '', supplier.totalEngaged, '', '', '', '']);
-        else rows.push(['', 'TOTAL FOURNISSEUR', '', '', '', '', '', supplier.totalPaid, supplier.totalRemaining]);
+        sectionRowIdxs.push(rows.length);
+        if (exportType === 'all') rows.push(['', 'TOTAL FOURNISSEUR', '', '', xf(supplier.totalEngaged), '', '', xf(supplier.totalPaid), xf(supplier.totalRemaining)]);
+        else if (exportType === 'engagements') rows.push(['', 'TOTAL FOURNISSEUR', '', '', xf(supplier.totalEngaged), '', '', '', '']);
+        else rows.push(['', 'TOTAL FOURNISSEUR', '', '', '', '', '', xf(supplier.totalPaid), xf(supplier.totalRemaining)]);
         rows.push([]);
       });
 
       // Totaux généraux
+      const generalTotalIdx = rows.length;
       rows.push(['=== TOTAUX GÉNÉRAUX ===', '', '', '', '', '', '', '', '']);
       rows.push([`Total engagements: ${totalEngagements}`, `Montant engagé: ${formatAmount(totalAmountEngaged)} ${getCurrencySymbol()}`, '', '', '', '', '', '', '']);
       rows.push([`Total paiements: ${totalPayments}`, `Montant payé: ${formatAmount(totalAmountPaid)} ${getCurrencySymbol()}`, `Reste: ${formatAmount(totalRemaining)} ${getCurrencySymbol()}`, '', '', '', '', '', '']);
 
       const ws = XLSX.utils.aoa_to_sheet(rows);
       ws['!cols'] = [{ wch: 35 }, { wch: 15 }, { wch: 20 }, { wch: 50 }, { wch: 18 }, { wch: 15 }, { wch: 15 }, { wch: 18 }, { wch: 18 }];
+
+      // Couleurs
+      const NCOLS = 9;
+      styleTitle(ws, 0, NCOLS);
+      styleHeaderRow(ws, headerRowIdx, NCOLS);
+      sectionRowIdxs.forEach(idx => styleSectionRow(ws, idx, NCOLS));
+      styleTotalRow(ws, generalTotalIdx, NCOLS);
+      styleTotalRow(ws, generalTotalIdx + 1, NCOLS);
+      styleTotalRow(ws, generalTotalIdx + 2, NCOLS);
+
       XLSX.utils.book_append_sheet(wb, ws, 'Rapport Fournisseurs');
 
       const suffix = exportType === 'engagements' ? 'engagements' : exportType === 'payments' ? 'paiements' : 'complet';
@@ -1022,7 +1043,7 @@ const Reports: React.FC<ReportsProps> = ({
         const barHeight = 4;
         pdf.setFillColor(200, 200, 200);
         pdf.rect(margin, yPosition, barWidth, barHeight, 'F');
-        pdf.setFillColor(59, 130, 246);
+        pdf.setFillColor(79, 70, 229);
         const progressWidth = Math.min(grant.utilizationRate, 100) / 100 * barWidth;
         pdf.rect(margin, yPosition, progressWidth, barHeight, 'F');
         yPosition += 8;
@@ -1101,7 +1122,7 @@ const Reports: React.FC<ReportsProps> = ({
       const columnWidths = [25, 30, 60, 30, 25];
       let xPos = margin;
 
-      pdf.setFillColor(59, 130, 246);
+      pdf.setFillColor(79, 70, 229);
       pdf.rect(margin, yPosition, pageWidth - (margin * 2), 10, 'F');
       pdf.setTextColor(255, 255, 255);
       pdf.setFontSize(8);
@@ -1126,10 +1147,10 @@ const Reports: React.FC<ReportsProps> = ({
 
       filteredExpenses.forEach((expense, index) => {
         const rowHeight = 12;
-        if (yPosition + rowHeight > pageHeight - margin) {
+        if (yPosition + rowHeight > pageHeight - 20) {
           pdf.addPage();
           yPosition = margin + 20;
-          pdf.setFillColor(59, 130, 246);
+          pdf.setFillColor(79, 70, 229);
           pdf.rect(margin, yPosition, pageWidth - (margin * 2), 10, 'F');
           pdf.setTextColor(255, 255, 255);
           pdf.setFontSize(8);
@@ -1248,7 +1269,7 @@ const Reports: React.FC<ReportsProps> = ({
       const columnWidths = [35, 25, 30, 30, 30, 25];
       let xPos = margin;
 
-      pdf.setFillColor(59, 130, 246);
+      pdf.setFillColor(79, 70, 229);
       pdf.rect(margin, yPosition, pageWidth - (margin * 2), 10, 'F');
       pdf.setTextColor(255, 255, 255);
       pdf.setFontSize(8);
@@ -1265,10 +1286,10 @@ const Reports: React.FC<ReportsProps> = ({
 
       sortedBeneficiaries.forEach((beneficiary, index) => {
         const rowHeight = 10;
-        if (yPosition + rowHeight > pageHeight - margin) {
+        if (yPosition + rowHeight > pageHeight - 20) {
           pdf.addPage();
           yPosition = margin + 20;
-          pdf.setFillColor(59, 130, 246);
+          pdf.setFillColor(79, 70, 229);
           pdf.rect(margin, yPosition, pageWidth - (margin * 2), 10, 'F');
           pdf.setTextColor(255, 255, 255);
           pdf.setFontSize(8);
@@ -1439,6 +1460,12 @@ const Reports: React.FC<ReportsProps> = ({
       };
 
       if (exportType === 'all' || exportType === 'engagements') {
+        // Ne pas coller le titre + l'en-tête du tableau au pied de page : garantir la place
+        // d'au moins le titre, l'en-tête et une ligne (≈ 30 mm au-dessus de la zone de pied de page).
+        if (yPosition + 30 > pageHeight - 20) {
+          pdf.addPage();
+          yPosition = margin + 20;
+        }
         pdf.setFontSize(12);
         pdf.setFont('helvetica', 'bold');
         pdf.text('ENGAGEMENTS', margin, yPosition);
@@ -1448,7 +1475,7 @@ const Reports: React.FC<ReportsProps> = ({
         const engWidths = [25, 30, 55, 30, 25];
         let xPos = margin;
 
-        pdf.setFillColor(59, 130, 246);
+        pdf.setFillColor(79, 70, 229);
         pdf.rect(margin, yPosition, pageWidth - (margin * 2), 10, 'F');
         pdf.setTextColor(255, 255, 255);
         pdf.setFontSize(8);
@@ -1465,10 +1492,10 @@ const Reports: React.FC<ReportsProps> = ({
 
         supplier.engagements.forEach((engagement, index) => {
           const rowHeight = 12;
-          if (yPosition + rowHeight > pageHeight - margin) {
+          if (yPosition + rowHeight > pageHeight - 20) {
             pdf.addPage();
             yPosition = margin + 20;
-            pdf.setFillColor(59, 130, 246);
+            pdf.setFillColor(79, 70, 229);
             pdf.rect(margin, yPosition, pageWidth - (margin * 2), 10, 'F');
             pdf.setTextColor(255, 255, 255);
             pdf.setFontSize(8);
@@ -1519,6 +1546,10 @@ const Reports: React.FC<ReportsProps> = ({
         if (exportType === 'all') {
           pdf.addPage();
           yPosition = margin + 20;
+        } else if (yPosition + 30 > pageHeight - 20) {
+          // En mode « paiements seuls », éviter que le titre + en-tête ne chevauchent le pied de page
+          pdf.addPage();
+          yPosition = margin + 20;
         }
 
         pdf.setFontSize(12);
@@ -1530,7 +1561,7 @@ const Reports: React.FC<ReportsProps> = ({
         const payWidths = [25, 30, 30, 22, 22, 22, 25];
         let xPos = margin;
 
-        pdf.setFillColor(59, 130, 246);
+        pdf.setFillColor(79, 70, 229);
         pdf.rect(margin, yPosition, pageWidth - (margin * 2), 10, 'F');
         pdf.setTextColor(255, 255, 255);
         pdf.setFontSize(8);
@@ -1550,11 +1581,11 @@ const Reports: React.FC<ReportsProps> = ({
           const remaining = getRemainingAmountForPayment(payment);
           const status = getPaymentStatus(payment);
           const rowHeight = 10;
-          
-          if (yPosition + rowHeight > pageHeight - margin) {
+
+          if (yPosition + rowHeight > pageHeight - 20) {
             pdf.addPage();
             yPosition = margin + 20;
-            pdf.setFillColor(59, 130, 246);
+            pdf.setFillColor(79, 70, 229);
             pdf.rect(margin, yPosition, pageWidth - (margin * 2), 10, 'F');
             pdf.setTextColor(255, 255, 255);
             pdf.setFontSize(8);
@@ -1738,6 +1769,11 @@ const Reports: React.FC<ReportsProps> = ({
 
         // ---- TABLEAU DES ENGAGEMENTS ----
         if ((exportType === 'all' || exportType === 'engagements') && supplier.engagements.length > 0) {
+          // Garantir la place du titre + en-tête + une ligne au-dessus du pied de page
+          if (yPosition + 26 > pageHeight - 20) {
+            pdf.addPage();
+            yPosition = margin + 20;
+          }
           pdf.setFontSize(10);
           pdf.setFont('helvetica', 'bold');
           pdf.text('ENGAGEMENTS', margin, yPosition);
@@ -1748,7 +1784,7 @@ const Reports: React.FC<ReportsProps> = ({
           let xPos = margin;
 
           // En-tête du tableau
-          pdf.setFillColor(59, 130, 246);
+          pdf.setFillColor(79, 70, 229);
           pdf.rect(margin, yPosition, pageWidth - (margin * 2), 8, 'F');
           pdf.setTextColor(255, 255, 255);
           pdf.setFontSize(7);
@@ -1764,11 +1800,11 @@ const Reports: React.FC<ReportsProps> = ({
           // Lignes des engagements
           supplier.engagements.forEach((eng, idx) => {
             // Gestion du saut de page pour le tableau
-            if (yPosition + 10 > pageHeight - margin) {
+            if (yPosition + 10 > pageHeight - 20) {
               pdf.addPage();
               yPosition = margin + 20;
               // Réafficher l'en-tête du tableau sur la nouvelle page
-              pdf.setFillColor(59, 130, 246);
+              pdf.setFillColor(79, 70, 229);
               pdf.rect(margin, yPosition, pageWidth - (margin * 2), 8, 'F');
               pdf.setTextColor(255, 255, 255);
               pdf.setFontSize(7);
@@ -1822,6 +1858,11 @@ const Reports: React.FC<ReportsProps> = ({
 
         // ---- TABLEAU DES PAIEMENTS ----
         if ((exportType === 'all' || exportType === 'payments') && supplier.payments.length > 0) {
+          // Garantir la place du titre + en-tête + une ligne au-dessus du pied de page
+          if (yPosition + 26 > pageHeight - 20) {
+            pdf.addPage();
+            yPosition = margin + 20;
+          }
           pdf.setFontSize(10);
           pdf.setFont('helvetica', 'bold');
           pdf.text('PAIEMENTS', margin, yPosition);
@@ -1832,7 +1873,7 @@ const Reports: React.FC<ReportsProps> = ({
           let xPos = margin;
 
           // En-tête du tableau
-          pdf.setFillColor(59, 130, 246);
+          pdf.setFillColor(79, 70, 229);
           pdf.rect(margin, yPosition, pageWidth - (margin * 2), 8, 'F');
           pdf.setTextColor(255, 255, 255);
           pdf.setFontSize(7);
@@ -1852,10 +1893,10 @@ const Reports: React.FC<ReportsProps> = ({
             const status = getPaymentStatus(pay);
 
             // Gestion du saut de page pour le tableau
-            if (yPosition + 10 > pageHeight - margin) {
+            if (yPosition + 10 > pageHeight - 20) {
               pdf.addPage();
               yPosition = margin + 20;
-              pdf.setFillColor(59, 130, 246);
+              pdf.setFillColor(79, 70, 229);
               pdf.rect(margin, yPosition, pageWidth - (margin * 2), 8, 'F');
               pdf.setTextColor(255, 255, 255);
               pdf.setFontSize(7);
@@ -2195,6 +2236,8 @@ const Reports: React.FC<ReportsProps> = ({
               <option value="detailed">Détaillé</option>
               <option value="beneficiaries">Bénéficiaires</option>
               <option value="supplier-detail">Détail par Fournisseur</option>
+              <option value="evolution">Graphique d'évolution</option>
+              <option value="accounting">Export comptable (FEC / Journal / Balance)</option>
             </select>
           </div>
 
@@ -2265,6 +2308,28 @@ const Reports: React.FC<ReportsProps> = ({
       )}
 
       {/* === CONTENU DES RAPPORTS === */}
+
+      {/* Graphique d'évolution */}
+      {reportType === 'evolution' && (
+        <EvolutionChart
+          grant={selectedGrant}
+          budgetLines={budgetLines}
+          subBudgetLines={subBudgetLines}
+          engagements={expenses}
+          payments={payments}
+        />
+      )}
+
+      {/* Export comptable (FEC / Journal / Grand livre / Balance) */}
+      {reportType === 'accounting' && (
+        <AccountingExport
+          grant={selectedGrant}
+          budgetLines={budgetLines}
+          subBudgetLines={subBudgetLines}
+          payments={payments}
+          notificationTranches={notificationTranches}
+        />
+      )}
 
       {/* Rapport de synthèse */}
       {reportType === 'summary' && (

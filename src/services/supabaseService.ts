@@ -7,9 +7,11 @@ import {
   Payment, 
   BankAccount, 
   BankTransaction, 
-  Prefinancing, 
+  Prefinancing,
   EmployeeLoan,
-  PartialPayment
+  PartialPayment,
+  NotificationTranche,
+  SubLineTransfer
 } from '../types';
 import { User, UserRole } from '../types/user';
 
@@ -152,7 +154,8 @@ export const budgetLinesService = {
         engagedAmount: line.engaged_amount,
         availableAmount: line.available_amount,
         description: line.description,
-        color: line.color
+        color: line.color,
+        accountingAccount: line.accounting_account ?? undefined
       }));
     } catch (error) {
       handleSupabaseError(error);
@@ -173,7 +176,8 @@ export const budgetLinesService = {
           engaged_amount: budgetLine.engagedAmount,
           available_amount: budgetLine.availableAmount,
           description: budgetLine.description,
-          color: budgetLine.color
+          color: budgetLine.color,
+          accounting_account: budgetLine.accountingAccount ?? null
         })
         .select()
         .single();
@@ -190,7 +194,8 @@ export const budgetLinesService = {
         engagedAmount: data.engaged_amount,
         availableAmount: data.available_amount,
         description: data.description,
-        color: data.color
+        color: data.color,
+        accountingAccount: data.accounting_account ?? undefined
       };
     } catch (error) {
       handleSupabaseError(error);
@@ -212,6 +217,7 @@ export const budgetLinesService = {
           ...(updates.availableAmount !== undefined && { available_amount: updates.availableAmount }),
           ...(updates.description !== undefined && { description: updates.description }),
           ...(updates.color && { color: updates.color }),
+          ...(updates.accountingAccount !== undefined && { accounting_account: updates.accountingAccount || null }),
           updated_at: new Date().toISOString()
         })
         .eq('id', id);
@@ -257,7 +263,8 @@ export const subBudgetLinesService = {
         notifiedAmount: line.notified_amount,
         engagedAmount: line.engaged_amount,
         availableAmount: line.available_amount,
-        description: line.description
+        description: line.description,
+        accountingAccount: line.accounting_account ?? undefined
       }));
     } catch (error) {
       handleSupabaseError(error);
@@ -278,7 +285,8 @@ export const subBudgetLinesService = {
           notified_amount: subBudgetLine.notifiedAmount,
           engaged_amount: subBudgetLine.engagedAmount,
           available_amount: subBudgetLine.availableAmount,
-          description: subBudgetLine.description
+          description: subBudgetLine.description,
+          accounting_account: subBudgetLine.accountingAccount ?? null
         })
         .select()
         .single();
@@ -295,7 +303,8 @@ export const subBudgetLinesService = {
         notifiedAmount: data.notified_amount,
         engagedAmount: data.engaged_amount,
         availableAmount: data.available_amount,
-        description: data.description
+        description: data.description,
+        accountingAccount: data.accounting_account ?? undefined
       };
     } catch (error) {
       handleSupabaseError(error);
@@ -317,6 +326,7 @@ export const subBudgetLinesService = {
           ...(updates.engagedAmount !== undefined && { engaged_amount: updates.engagedAmount }),
           ...(updates.availableAmount !== undefined && { available_amount: updates.availableAmount }),
           ...(updates.description !== undefined && { description: updates.description }),
+          ...(updates.accountingAccount !== undefined && { accounting_account: updates.accountingAccount || null }),
           updated_at: new Date().toISOString()
         })
         .eq('id', id);
@@ -365,7 +375,8 @@ export const engagementsService = {
         invoiceNumber: engagement.invoice_number,
         date: engagement.date,
         status: engagement.status as Engagement['status'],
-        approvals: engagement.approvals as Engagement['approvals']
+        approvals: engagement.approvals as Engagement['approvals'],
+        attachments: (engagement as any).attachments || []
       }));
     } catch (error) {
       handleSupabaseError(error);
@@ -389,7 +400,8 @@ export const engagementsService = {
           invoice_number: engagement.invoiceNumber,
           date: engagement.date,
           status: engagement.status,
-          approvals: engagement.approvals as any
+          approvals: engagement.approvals as any,
+          attachments: (engagement.attachments || []) as any
         })
         .select()
         .single();
@@ -409,7 +421,8 @@ export const engagementsService = {
         invoiceNumber: data.invoice_number,
         date: data.date,
         status: data.status as Engagement['status'],
-        approvals: data.approvals as Engagement['approvals']
+        approvals: data.approvals as Engagement['approvals'],
+        attachments: (data as any).attachments || []
       };
     } catch (error) {
       handleSupabaseError(error);
@@ -434,6 +447,7 @@ export const engagementsService = {
           ...(updates.date && { date: updates.date }),
           ...(updates.status && { status: updates.status }),
           ...(updates.approvals !== undefined && { approvals: updates.approvals as any }),
+          ...(updates.attachments !== undefined && { attachments: updates.attachments as any }),
           updated_at: new Date().toISOString()
         })
         .eq('id', id);
@@ -494,7 +508,8 @@ export const paymentsService = {
         cashedDate: payment.cashed_date,
         approvals: payment.approvals as Payment['approvals'],
         partialPayments: payment.partial_payments || [],        // <-- ajout
-        remainingAmount: payment.remaining_amount || 0          // <-- ajout
+        remainingAmount: payment.remaining_amount || 0,         // <-- ajout
+        attachments: (payment as any).attachments || []
 
       }));
     } catch (error) {
@@ -529,7 +544,8 @@ export const paymentsService = {
           control_notes: payment.controlNotes,
           status: payment.status,
           cashed_date: payment.cashedDate,
-          approvals: payment.approvals as any
+          approvals: payment.approvals as any,
+          attachments: (payment.attachments || []) as any
         })
         .select()
         .single();
@@ -559,7 +575,9 @@ export const paymentsService = {
         controlNotes: data.control_notes,
         status: data.status as Payment['status'],
         cashedDate: data.cashed_date,
-        approvals: data.approvals as Payment['approvals']
+        approvals: data.approvals as Payment['approvals'],
+        partialPayments: (data as any).partial_payments || [],
+        attachments: (data as any).attachments || []
       };
     } catch (error) {
       handleSupabaseError(error);
@@ -594,6 +612,7 @@ export const paymentsService = {
           ...(updates.status && { status: updates.status }),
           ...(updates.cashedDate !== undefined && { cashed_date: updates.cashedDate }),
           ...(updates.approvals !== undefined && { approvals: updates.approvals as any }),
+          ...(updates.attachments !== undefined && { attachments: updates.attachments as any }),
           updated_at: new Date().toISOString()
         })
         .eq('id', id);
@@ -1162,7 +1181,8 @@ export const prefinancingsService = {
         status: prefinancing.status as Prefinancing['status'],
         repayments: prefinancing.repayments as any,
         description: prefinancing.description,
-        approvals: prefinancing.approvals as any
+        approvals: prefinancing.approvals as any,
+        attachments: (prefinancing as any).attachments || []
       }));
     } catch (error) {
       handleSupabaseError(error);
@@ -1189,7 +1209,8 @@ export const prefinancingsService = {
           status: prefinancing.status,
           repayments: prefinancing.repayments as any,
           description: prefinancing.description,
-          approvals: prefinancing.approvals as any
+          approvals: prefinancing.approvals as any,
+          attachments: (prefinancing.attachments || []) as any
         })
         .select()
         .single();
@@ -1212,7 +1233,8 @@ export const prefinancingsService = {
         status: data.status as Prefinancing['status'],
         repayments: data.repayments as any,
         description: data.description,
-        approvals: data.approvals as any
+        approvals: data.approvals as any,
+        attachments: (data as any).attachments || []
       };
     } catch (error) {
       handleSupabaseError(error);
@@ -1240,6 +1262,7 @@ export const prefinancingsService = {
           ...(updates.repayments !== undefined && { repayments: updates.repayments as any }),
           ...(updates.description && { description: updates.description }),
           ...(updates.approvals !== undefined && { approvals: updates.approvals as any }),
+          ...(updates.attachments !== undefined && { attachments: updates.attachments as any }),
           updated_at: new Date().toISOString()
         })
         .eq('id', id);
@@ -1289,7 +1312,8 @@ export const employeeLoansService = {
         repaymentSchedule: loan.repayment_schedule as any,
         repayments: loan.repayments as any,
         status: loan.status as EmployeeLoan['status'],
-        approvals: loan.approvals as any
+        approvals: loan.approvals as any,
+        attachments: (loan as any).attachments || []
       }));
     } catch (error) {
       handleSupabaseError(error);
@@ -1314,7 +1338,8 @@ export const employeeLoansService = {
           repayment_schedule: loan.repaymentSchedule as any,
           repayments: loan.repayments as any,
           status: loan.status,
-          approvals: loan.approvals as any
+          approvals: loan.approvals as any,
+          attachments: (loan.attachments || []) as any
         })
         .select()
         .single();
@@ -1335,7 +1360,8 @@ export const employeeLoansService = {
         repaymentSchedule: data.repayment_schedule as any,
         repayments: data.repayments as any,
         status: data.status as EmployeeLoan['status'],
-        approvals: data.approvals as any
+        approvals: data.approvals as any,
+        attachments: (data as any).attachments || []
       };
     } catch (error) {
       handleSupabaseError(error);
@@ -1361,6 +1387,7 @@ export const employeeLoansService = {
           ...(updates.repayments !== undefined && { repayments: updates.repayments as any }),
           ...(updates.status && { status: updates.status }),
           ...(updates.approvals !== undefined && { approvals: updates.approvals as any }),
+          ...(updates.attachments !== undefined && { attachments: updates.attachments as any }),
           updated_at: new Date().toISOString()
         })
         .eq('id', id);
@@ -1422,4 +1449,117 @@ export const appSettingsService = {
       handleSupabaseError(error);
     }
   }
+};
+// ============================================================
+// Historique des tranches de notification
+// ============================================================
+export const notificationTranchesService = {
+  async getAll(): Promise<NotificationTranche[]> {
+    try {
+      const { data, error } = await supabase
+        .from('notification_tranches')
+        .select('*')
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return (data || []).map((t: any) => ({
+        id: t.id,
+        grantId: t.grant_id,
+        amount: Number(t.amount),
+        date: t.date,
+        distributionMode: t.distribution_mode,
+        distribution: t.distribution || [],
+        note: t.note || undefined,
+        createdBy: t.created_by || undefined,
+        createdAt: t.created_at,
+      }));
+    } catch (error) {
+      handleSupabaseError(error);
+      return [];
+    }
+  },
+
+  async create(tranche: Omit<NotificationTranche, 'id' | 'createdAt'>): Promise<NotificationTranche> {
+    const { data, error } = await supabase
+      .from('notification_tranches')
+      .insert({
+        grant_id: tranche.grantId,
+        amount: tranche.amount,
+        date: tranche.date,
+        distribution_mode: tranche.distributionMode,
+        distribution: tranche.distribution || [],
+        note: tranche.note || null,
+        created_by: tranche.createdBy || null,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return {
+      id: data.id,
+      grantId: data.grant_id,
+      amount: Number(data.amount),
+      date: data.date,
+      distributionMode: data.distribution_mode,
+      distribution: data.distribution || [],
+      note: data.note || undefined,
+      createdBy: data.created_by || undefined,
+      createdAt: data.created_at,
+    };
+  },
+};
+
+// ============================================================
+// Historique des transferts inter-sous-lignes
+// ============================================================
+export const subLineTransfersService = {
+  async getAll(): Promise<SubLineTransfer[]> {
+    try {
+      const { data, error } = await supabase
+        .from('subline_transfers')
+        .select('*')
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return (data || []).map((t: any) => ({
+        id: t.id,
+        grantId: t.grant_id,
+        fromSubBudgetLineId: t.from_sub_budget_line_id,
+        toSubBudgetLineId: t.to_sub_budget_line_id,
+        amount: Number(t.amount),
+        date: t.date,
+        reason: t.reason || undefined,
+        createdBy: t.created_by || undefined,
+        createdAt: t.created_at,
+      }));
+    } catch (error) {
+      handleSupabaseError(error);
+      return [];
+    }
+  },
+
+  async create(transfer: Omit<SubLineTransfer, 'id' | 'createdAt'>): Promise<SubLineTransfer> {
+    const { data, error } = await supabase
+      .from('subline_transfers')
+      .insert({
+        grant_id: transfer.grantId,
+        from_sub_budget_line_id: transfer.fromSubBudgetLineId,
+        to_sub_budget_line_id: transfer.toSubBudgetLineId,
+        amount: transfer.amount,
+        date: transfer.date,
+        reason: transfer.reason || null,
+        created_by: transfer.createdBy || null,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return {
+      id: data.id,
+      grantId: data.grant_id,
+      fromSubBudgetLineId: data.from_sub_budget_line_id,
+      toSubBudgetLineId: data.to_sub_budget_line_id,
+      amount: Number(data.amount),
+      date: data.date,
+      reason: data.reason || undefined,
+      createdBy: data.created_by || undefined,
+      createdAt: data.created_at,
+    };
+  },
 };

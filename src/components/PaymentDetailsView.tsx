@@ -15,6 +15,7 @@ import {
   DollarSign
 } from 'lucide-react';
 import { Payment, Engagement, BudgetLine, SubBudgetLine, Grant, PAYMENT_STATUS, PartialPayment } from '../types';
+import { AttachmentList, AttachmentActions } from './AttachmentUploader';
 import jsPDF from 'jspdf';
 
 interface PaymentDetailsViewProps {
@@ -538,6 +539,16 @@ const PaymentDetailsView: React.FC<PaymentDetailsViewProps> = ({
                             </td>
                             <td className="px-4 py-3 text-sm text-gray-900 font-medium">
                               {pp.reference || '-'}
+                              {pp.attachments && pp.attachments.length > 0 && (
+                                <div className="mt-1 flex flex-col gap-1">
+                                  {pp.attachments.map(att => (
+                                    <div key={att.id} className="flex items-center gap-1 min-w-0">
+                                      <span className="truncate max-w-[140px] text-xs text-gray-600">{att.name}</span>
+                                      <AttachmentActions attachment={att} compact />
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </td>
                             <td className="px-4 py-3 text-sm text-gray-600">
                               {getPaymentMethodLabel(pp.paymentMethod)}
@@ -658,6 +669,13 @@ const PaymentDetailsView: React.FC<PaymentDetailsViewProps> = ({
               <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                 <p className="text-gray-900 whitespace-pre-wrap">{payment.description}</p>
               </div>
+            </div>
+          )}
+
+          {/* Documents physiques associés */}
+          {payment.attachments && payment.attachments.length > 0 && (
+            <div className="border-t border-gray-200 pt-8">
+              <AttachmentList attachments={payment.attachments} title="Fiche de paiement / documents associés" />
             </div>
           )}
 

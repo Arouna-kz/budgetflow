@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Edit, Trash2, Calendar, AlertCircle, ChevronDown, ChevronRight, ChevronLeft, SortAsc, SortDesc, Download } from 'lucide-react';
+import { Plus, Edit, Trash2, Calendar, AlertCircle, ChevronDown, ChevronRight, ChevronLeft, SortAsc, SortDesc, Download, ArrowRightLeft, X } from 'lucide-react';
 import { showSuccess, showError, showValidationError, confirmDelete, showWarning } from '../utils/alerts';
-import { BudgetLine, SubBudgetLine, Grant } from '../types';
+import { BudgetLine, SubBudgetLine, Grant, SubLineTransfer } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 import jsPDF from 'jspdf';
+import * as XLSX from 'xlsx-js-style';
+import { styleTitle, styleHeaderRow, styleDataRows, styleTotalRow, styleSectionRow } from '../utils/excelStyle';
 
 // Interface des propriétés du composant
 interface BudgetPlanningProps {
@@ -16,6 +18,7 @@ interface BudgetPlanningProps {
     onUpdateSubBudgetLine: (id: string, updates: Partial<SubBudgetLine>) => void;
     onDeleteBudgetLine: (id: string) => void;
     onDeleteSubBudgetLine: (id: string) => void;
+    onAddSubLineTransfer?: (transfer: Omit<SubLineTransfer, 'id' | 'createdAt'>) => void;
 }
 
 const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
@@ -27,7 +30,8 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
     onUpdateBudgetLine,
     onUpdateSubBudgetLine,
     onDeleteBudgetLine,
-    onDeleteSubBudgetLine
+    onDeleteSubBudgetLine,
+    onAddSubLineTransfer
 }) => {
     // États pour la gestion des formulaires et de l'interface
     const [showBudgetLineForm, setShowBudgetLineForm] = useState(false);
@@ -69,7 +73,8 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         name: '',
         plannedAmount: '',
         notifiedAmount: '',
-        description: ''
+        description: '',
+        accountingAccount: ''
     });
     // Vérification des permissions
     const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
@@ -78,6 +83,48 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
     const selectedGrant = grants.length > 0 ? grants[0] : null;
     const filteredBudgetLines = budgetLines;
     const filteredSubBudgetLines = subBudgetLines;
+
+    // ===== Notifications : tranches & transferts =====
+    const todayStr = new Date().toISOString().split('T')[0];
+    const [showTransferModal, setShowTransferModal] = useState(false);
+    const [transferForm, setTransferForm] = useState({ from: '', to: '', amount: '', reason: '', date: todayStr });
+    const [transferSubmitting, setTransferSubmitting] = useState(false);
+
+    const submitTransfer = async () => {
+        if (transferSubmitting) return; // évite les doubles envois
+        const amount = parseFloat(transferForm.amount);
+        if (!selectedGrant || !transferForm.from || !transferForm.to || isNaN(amount) || amount <= 0) {
+            showValidationError('Champs manquants', 'Renseignez la sous-ligne source, la destination et un montant valide.');
+            return;
+        }
+        if (transferForm.from === transferForm.to) {
+            showValidationError('Sous-lignes identiques', 'La source et la destination doivent être différentes.');
+            return;
+        }
+        const src = filteredSubBudgetLines.find(s => s.id === transferForm.from);
+        if (src && amount > (src.availableAmount || 0)) {
+            showValidationError('Solde insuffisant', 'Le montant dépasse le disponible de la sous-ligne source.');
+            return;
+        }
+        setTransferSubmitting(true);
+        try {
+            await onAddSubLineTransfer?.({
+                grantId: selectedGrant.id, fromSubBudgetLineId: transferForm.from, toSubBudgetLineId: transferForm.to,
+                amount, date: transferForm.date, reason: transferForm.reason || undefined,
+            });
+            setShowTransferModal(false);
+            setTransferForm({ from: '', to: '', amount: '', reason: '', date: todayStr });
+        } catch {
+            // erreur déjà signalée par le gestionnaire ; on garde la modale ouverte pour réessayer
+        } finally {
+            setTransferSubmitting(false);
+        }
+    };
+
+    // Alerte 30% (non bloquante) pour le transfert
+    const transferSource = filteredSubBudgetLines.find(s => s.id === transferForm.from);
+    const transferAmountNum = parseFloat(transferForm.amount) || 0;
+    const exceeds30 = !!transferSource && transferSource.notifiedAmount > 0 && transferAmountNum > 0.3 * transferSource.notifiedAmount;
 
     // Chargement initial - marquer les éléments modifiés existants
     useEffect(() => {
@@ -206,6 +253,78 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         return plannedAmount > 0 ? (notifiedAmount / plannedAmount) * 100 : 0;
     };
     
+    // Nombre formaté avec séparateur d'espace (ex: 2000 -> "2 000")
+    const fmtNum = (n: number) => (Number(n) || 0).toLocaleString('fr-FR', { maximumFractionDigits: 2 }).replace(/ | /g, ' ');
+
+    // Export Excel coloré de la planification (lignes + sous-lignes)
+    const exportToExcel = async () => {
+      if (!canExport) {
+        showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
+        return;
+      }
+      try {
+        const rows: any[] = [];
+        rows.push(['PLANIFICATION BUDGÉTAIRE']);
+        rows.push([`Généré le: ${new Date().toLocaleDateString('fr-FR')}`]);
+        rows.push([]);
+
+        const headerRowIdx = rows.length;
+        rows.push(['Code', 'Ligne / Sous-ligne', 'Type', 'Budget planifié', 'Budget notifié', 'Engagé', 'Disponible', 'Taux notification']);
+        const firstDataRow = rows.length;
+        const sectionRowIdxs: number[] = [];
+
+        let totalPlanned = 0, totalNotified = 0;
+
+        filteredBudgetLines.forEach((line) => {
+          const rate = getNotificationRate(line.plannedAmount, line.notifiedAmount);
+          sectionRowIdxs.push(rows.length);
+          rows.push([
+            line.code, line.name, 'Ligne',
+            fmtNum(line.plannedAmount), fmtNum(line.notifiedAmount),
+            fmtNum(line.engagedAmount || 0), fmtNum(line.availableAmount || 0),
+            `${rate.toFixed(1)}%`
+          ]);
+          totalPlanned += line.plannedAmount;
+          totalNotified += line.notifiedAmount;
+
+          const subs = filteredSubBudgetLines.filter(sub => sub.budgetLineId === line.id);
+          subs.forEach((sub) => {
+            const subRate = getNotificationRate(sub.plannedAmount, sub.notifiedAmount);
+            rows.push([
+              sub.code, `   ↳ ${sub.name}`, 'Sous-ligne',
+              fmtNum(sub.plannedAmount), fmtNum(sub.notifiedAmount),
+              fmtNum(sub.engagedAmount || 0), fmtNum(sub.availableAmount || 0),
+              `${subRate.toFixed(1)}%`
+            ]);
+          });
+        });
+        const lastDataRow = rows.length - 1;
+
+        const overallRate = totalPlanned > 0 ? (totalNotified / totalPlanned) * 100 : 0;
+        rows.push(['TOTAUX', '', '', fmtNum(totalPlanned), fmtNum(totalNotified), '', '', `${overallRate.toFixed(1)}%`]);
+        const totalRowIdx = rows.length - 1;
+
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet(rows);
+        ws['!cols'] = [{ wch: 14 }, { wch: 40 }, { wch: 12 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 16 }];
+
+        const NCOLS = 8;
+        styleTitle(ws, 0, NCOLS);
+        styleHeaderRow(ws, headerRowIdx, NCOLS);
+        styleDataRows(ws, firstDataRow, lastDataRow, NCOLS);
+        sectionRowIdxs.forEach(idx => styleSectionRow(ws, idx, NCOLS));
+        styleTotalRow(ws, totalRowIdx, NCOLS);
+
+        XLSX.utils.book_append_sheet(wb, ws, 'Planification');
+        XLSX.writeFile(wb, `planification-budgetaire-${new Date().toISOString().split('T')[0]}.xlsx`);
+        showSuccess('Export réussi', 'Le fichier Excel a été généré avec succès');
+      } catch (error) {
+        console.error('Erreur export Excel planification:', error);
+        showError('Erreur', 'Impossible de générer le fichier Excel');
+      }
+    };
+
+
     // Fonction d'exportation en PDF
     const exportToPDF = async () => {
       if (!canExport) {
@@ -435,13 +554,14 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
 
         // Fonction pour dessiner l'en-tête du tableau
         const drawTableHeader = (y: number) => {
-          pdf.setFillColor(243, 244, 246);
+          pdf.setFillColor(79, 70, 229);
           pdf.rect(margin.left, y, contentWidth, headerHeight, 'F');
-          
+
           let headerX = margin.left;
           tableHeaders.forEach((header, index) => {
             pdf.setFontSize(8);
             pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(255, 255, 255);
             const align = index >= 2 ? 'right' : 'left';
             const textX = align === 'right' ? headerX + columnWidths[index] - cellPadding : headerX + cellPadding;
             
@@ -456,9 +576,10 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
             
             pdf.setDrawColor(200, 200, 200);
             pdf.rect(headerX, y, columnWidths[index], headerHeight);
-            
+
             headerX += columnWidths[index];
           });
+          pdf.setTextColor(0, 0, 0);
         };
 
         // Fonction pour dessiner une ligne de tableau
@@ -704,7 +825,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         setSubBudgetLineFormData({
             grantId: selectedGrant?.id || '',
             budgetLineId: selectedBudgetLineId || '',
-            code: '', name: '', plannedAmount: '0', notifiedAmount: '0', description: ''
+            code: '', name: '', plannedAmount: '0', notifiedAmount: '0', description: '', accountingAccount: ''
         });
         setShowSubBudgetLineForm(false);
         setEditingSubBudgetLine(null);
@@ -829,7 +950,8 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
           name: subBudgetLineFormData.name,
           plannedAmount,
           notifiedAmount,
-          description: subBudgetLineFormData.description
+          description: subBudgetLineFormData.description,
+          accountingAccount: subBudgetLineFormData.accountingAccount.trim() || undefined
         });
         markSubBudgetLineAsModified(editingSubBudgetLine.id);
         showSuccess('Sous-ligne modifiée', 'La sous-ligne budgétaire a été modifiée avec succès');
@@ -841,7 +963,8 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
           name: subBudgetLineFormData.name,
           plannedAmount,
           notifiedAmount,
-          description: subBudgetLineFormData.description
+          description: subBudgetLineFormData.description,
+          accountingAccount: subBudgetLineFormData.accountingAccount.trim() || undefined
         });
         showSuccess('Sous-ligne ajoutée', 'La sous-ligne budgétaire a été ajoutée avec succès');
       }
@@ -883,7 +1006,8 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
         name: line.name,
         plannedAmount: line.plannedAmount.toString(),
         notifiedAmount: line.notifiedAmount.toString(),
-        description: line.description || ''
+        description: line.description || '',
+        accountingAccount: line.accountingAccount || ''
       });
       setShowSubBudgetLineForm(true);
     };
@@ -1042,6 +1166,18 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                             <span>Exporter PDF</span>
                         </button>
                     )}
+                    {canExport && (
+                         <button onClick={exportToExcel} className="bg-green-700 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-800 flex items-center space-x-2">
+                            <Download className="w-4 h-4" />
+                            <span>Exporter Excel</span>
+                        </button>
+                    )}
+                    {canEdit && onAddSubLineTransfer && (
+                         <button onClick={() => setShowTransferModal(true)} className="bg-violet-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-violet-700 flex items-center space-x-2" title="Transférer des fonds entre sous-lignes">
+                            <ArrowRightLeft className="w-4 h-4" />
+                            <span>Transfert</span>
+                        </button>
+                    )}
                     {canCreate && (
                         <>
                             <button onClick={() => setShowSubBudgetLineForm(true)} className="bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 flex items-center space-x-2">
@@ -1099,6 +1235,70 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Les historiques des notifications et des transferts sont désormais
+                regroupés dans le menu « Historique » de la barre latérale. */}
+
+            {/* ===== MODAL TRANSFERT ===== */}
+            {showTransferModal && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-gray-900">Transfert entre sous-lignes</h3>
+                    <button onClick={() => setShowTransferModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full"><X className="w-5 h-5" /></button>
+                  </div>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Sous-ligne source *</label>
+                      <select value={transferForm.from} onChange={e => setTransferForm(f => ({ ...f, from: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                        <option value="">— Choisir —</option>
+                        {filteredSubBudgetLines.map(sl => (
+                          <option key={sl.id} value={sl.id}>{sl.code} - {sl.name} (dispo: {fmtNum(sl.availableAmount || 0)})</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Sous-ligne destination *</label>
+                      <select value={transferForm.to} onChange={e => setTransferForm(f => ({ ...f, to: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                        <option value="">— Choisir —</option>
+                        {filteredSubBudgetLines.filter(sl => sl.id !== transferForm.from).map(sl => (
+                          <option key={sl.id} value={sl.id}>{sl.code} - {sl.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Montant *</label>
+                        <input type="number" min="0" value={transferForm.amount} onChange={e => setTransferForm(f => ({ ...f, amount: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="0" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                        <input type="date" value={transferForm.date} onChange={e => setTransferForm(f => ({ ...f, date: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Motif (optionnel)</label>
+                      <input type="text" value={transferForm.reason} onChange={e => setTransferForm(f => ({ ...f, reason: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="Motif du transfert" />
+                    </div>
+                    {exceeds30 && (
+                      <div className="flex items-start gap-2 bg-orange-50 border border-orange-200 rounded-lg p-3">
+                        <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+                        <p className="text-sm text-orange-800">
+                          ⚠️ Ce montant dépasse <strong>30 %</strong> du montant de la sous-ligne source. Vous pouvez tout de même continuer si c'est volontaire.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex gap-3 mt-6">
+                    <button onClick={() => setShowTransferModal(false)} disabled={transferSubmitting} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg font-medium hover:bg-gray-50 disabled:opacity-50">Annuler</button>
+                    <button onClick={submitTransfer} disabled={transferSubmitting} className="flex-1 px-4 py-2 bg-violet-600 text-white rounded-lg font-medium hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                      {transferSubmitting && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                      {transferSubmitting ? 'Traitement…' : 'Effectuer le transfert'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* MODAL LIGNE BUDGETAIRE (RESPONSIVE) */}
             {showBudgetLineForm && (
@@ -1175,8 +1375,11 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
 
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
-                              <label className="block text-sm font-medium text-gray-700 mb-2">
-                                Budget planifié ({selectedGrant ? getCurrencySymbol(selectedGrant.currency) : '€'})*
+                              <label className="block text-sm font-medium text-gray-500 mb-2">
+                                Budget planifié ({selectedGrant ? getCurrencySymbol(selectedGrant.currency) : '€'})
+                                <span className="ml-2 text-xs font-normal text-gray-400">
+                                  {editingBudgetLine ? '(modifiable)' : '(calculé automatiquement)'}
+                                </span>
                               </label>
                               <div className="relative">
                                 <input
@@ -1185,16 +1388,21 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                   min="0"
                                   value={budgetLineFormData.plannedAmount}
                                   onChange={(e) => setBudgetLineFormData(prev => ({ ...prev, plannedAmount: e.target.value }))}
-                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8"
+                                  disabled={!editingBudgetLine}
+                                  className={`w-full px-3 py-2 rounded-lg pl-8 ${editingBudgetLine
+                                    ? 'border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
+                                    : 'border border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed'}`}
                                   placeholder="0.00"
-                                  required
                                 />
                               </div>
                             </div>
 
                             <div>
-                              <label className="block text-sm font-medium text-gray-700 mb-2">
+                              <label className="block text-sm font-medium text-gray-500 mb-2">
                                 Budget notifié ({selectedGrant ? getCurrencySymbol(selectedGrant.currency) : '€'})
+                                <span className="ml-2 text-xs font-normal text-gray-400">
+                                  {editingBudgetLine ? '(modifiable)' : '(calculé automatiquement)'}
+                                </span>
                               </label>
                               <div className="relative">
                                 <input
@@ -1203,12 +1411,20 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                   min="0"
                                   value={budgetLineFormData.notifiedAmount}
                                   onChange={(e) => setBudgetLineFormData(prev => ({ ...prev, notifiedAmount: e.target.value }))}
-                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8"
+                                  disabled={!editingBudgetLine}
+                                  className={`w-full px-3 py-2 rounded-lg pl-8 ${editingBudgetLine
+                                    ? 'border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
+                                    : 'border border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed'}`}
                                   placeholder="0.00"
                                 />
                               </div>
                             </div>
                           </div>
+                          <p className="text-xs text-gray-500 -mt-2">
+                            {editingBudgetLine
+                              ? 'Ces montants sont normalement alimentés automatiquement (planification des sous-lignes et notifications). Vous pouvez les ajuster manuellement ici si nécessaire.'
+                              : 'À la création, ces montants valent 0 : ils sont alimentés automatiquement par les sous-lignes (planifié) et les notifications (notifié). Vous pourrez les ajuster en modification.'}
+                          </p>
 
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1344,6 +1560,9 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                             <div>
                               <label className="block text-sm font-medium text-gray-700 mb-2">
                                 Budget notifié ({selectedGrant ? getCurrencySymbol(selectedGrant.currency) : '€'})
+                                <span className="ml-2 text-xs font-normal text-gray-400">
+                                  {editingSubBudgetLine ? '(modifiable)' : '(via notifications)'}
+                                </span>
                               </label>
                               <div className="relative">
                                 <input
@@ -1352,11 +1571,35 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                   min="0"
                                   value={subBudgetLineFormData.notifiedAmount}
                                   onChange={(e) => setSubBudgetLineFormData(prev => ({ ...prev, notifiedAmount: e.target.value }))}
-                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8"
+                                  disabled={!editingSubBudgetLine}
+                                  className={`w-full px-3 py-2 rounded-lg pl-8 ${editingSubBudgetLine
+                                    ? 'border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
+                                    : 'border border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed'}`}
                                   placeholder="0.00"
                                 />
                               </div>
+                              {!editingSubBudgetLine && (
+                                <p className="text-xs text-gray-400 mt-1">
+                                  À la création, le budget notifié vaut 0 : il est alimenté par « Notifier un montant ». Modifiable en édition.
+                                </p>
+                              )}
                             </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Compte comptable <span className="text-xs font-normal text-gray-400">(optionnel — pour l'export comptable)</span>
+                            </label>
+                            <input
+                              type="text"
+                              value={subBudgetLineFormData.accountingAccount}
+                              onChange={(e) => setSubBudgetLineFormData(prev => ({ ...prev, accountingAccount: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              placeholder="Ex: 604, 61, 62… (compte de charge)"
+                            />
+                            <p className="text-xs text-gray-400 mt-1">
+                              Compte de charge utilisé pour les écritures (FEC / Journal / Grand livre / Balance). À défaut, le compte de charge par défaut de l'écran d'export sera utilisé.
+                            </p>
                           </div>
 
                           <div>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Target, Users, FileText, BarChart3, CreditCard, Banknote, ArrowRightLeft,
-  DollarSign, Settings, LogOut, Menu, X, AlertTriangle, Sun, Moon
+  DollarSign, Settings, LogOut, Menu, X, AlertTriangle, Sun, Moon, History, ChevronLeft
 } from 'lucide-react';
 import { useAuth } from './hooks/useAuth';
 import { useTheme } from './hooks/useTheme';
@@ -17,8 +17,12 @@ import {
   appSettingsService,
   bankTransactionsService,
   prefinancingsService,
-  employeeLoansService
+  employeeLoansService,
+  notificationTranchesService,
+  subLineTransfersService
 } from './services/supabaseService';
+import { changeHistoryService, computeChanges, buildDeleteSnapshot, buildCreateSnapshot } from './services/changeHistoryService';
+import { ChangeHistoryEntry } from './types';
 import { Dashboard } from './components/Dashboard';
 import BudgetPlanning from './components/BudgetPlanning';
 import BudgetTracking from './components/BudgetTracking';
@@ -32,6 +36,7 @@ import TreasuryManager from './components/TreasuryManager';
 import PrefinancingManager from './components/PrefinancingManager';
 import EmployeeLoanManager from './components/EmployeeLoanManager';
 import Reports from './components/Reports';
+import HistoryCenter from './components/HistoryCenter';
 import UserManager from './components/UserManager';
 import UserProfile from './components/UserProfile';
 import GrantManager from './components/GrantManager';
@@ -49,6 +54,8 @@ import {
   Prefinancing, 
   EmployeeLoan,
   PartialPayment,
+  NotificationTranche,
+  SubLineTransfer,
 } from './types';
 import { User, UserRole } from './types/user';
 import { useGlobalNotifications } from './contexts/GlobalNotificationContext';
@@ -106,6 +113,7 @@ interface MenuItemWithTooltipProps {
   };
   isActive: boolean;
   onClick: () => void;
+  collapsed?: boolean;
   notificationCount?: number;
   paymentNotificationCount?: number;
   availableEngagementsNotificationCount?: number;
@@ -119,6 +127,7 @@ const MenuItemWithTooltip = ({
   item,
   isActive,
   onClick,
+  collapsed = false,
   notificationCount,
   paymentNotificationCount,
   availableEngagementsNotificationCount,
@@ -279,21 +288,30 @@ const MenuItemWithTooltip = ({
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
         onClick={onClick}
-        className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-left transition-all duration-200 group ${
+        title={collapsed ? item.label : undefined}
+        className={`w-full flex items-center rounded-xl text-left transition-all duration-200 group ${
+          collapsed ? 'justify-center px-0 py-3' : 'justify-between px-4 py-3'
+        } ${
           isActive
             ? 'bg-gradient-to-r from-white/20 to-white/10 backdrop-blur-sm border border-white/20 shadow-lg'
             : 'text-indigo-100 hover:bg-white/5 hover:text-white border border-transparent'
         }`}
       >
-        <div className="flex items-center space-x-3">
+        <div className={`flex items-center ${collapsed ? 'relative' : 'space-x-3'}`}>
           <Icon className={`w-5 h-5 transition-colors ${
             isActive ? 'text-white' : 'text-indigo-300 group-hover:text-white'
           }`} />
-          <span className="font-medium">{item.label}</span>
+          {!collapsed && <span className="font-medium">{item.label}</span>}
+          {/* En mode réduit : pastille de notification compacte sur l'icône */}
+          {collapsed && hasBadges && (
+            <span className={`absolute -top-2 -right-2 inline-flex items-center justify-center min-w-4 h-4 px-1 text-[9px] font-bold leading-none rounded-full text-white ${badges[0].color} ring-2 ring-indigo-800`}>
+              {badges[0].count}
+            </span>
+          )}
         </div>
 
-        {/* Badges superposés */}
-        {hasBadges && (
+        {/* Badges superposés (mode étendu) */}
+        {!collapsed && hasBadges && (
           <div className="flex flex-col items-end -space-y-1.5">
             {badges.map((badge, index) => (
               <span
@@ -309,7 +327,7 @@ const MenuItemWithTooltip = ({
         )}
       </button>
 
-      {showTooltip && tooltipContent && (
+      {showTooltip && (collapsed || tooltipContent) && (
         <div
           style={{
             position: 'fixed',
@@ -321,7 +339,8 @@ const MenuItemWithTooltip = ({
           className="pointer-events-none"
         >
           <div className="bg-gray-900 text-white text-sm rounded-lg py-2 px-3 shadow-xl border border-gray-700 max-w-xs">
-            {tooltipContent}
+            {collapsed && <div className="font-semibold whitespace-nowrap">{item.label}</div>}
+            {tooltipContent && <div className={collapsed ? 'mt-1 pt-1 border-t border-gray-700' : ''}>{tooltipContent}</div>}
             <div className="absolute left-0 top-1/2 transform -translate-x-1 -translate-y-1/2">
               <div className="border-8 border-transparent border-r-gray-900"></div>
             </div>
@@ -340,6 +359,8 @@ function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedGrantId, setSelectedGrantId] = useState<string>('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  // Réduction de la sidebar sur grand écran (xl+). Par défaut affichée comme aujourd'hui.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
 
   // Data states
@@ -354,6 +375,8 @@ function App() {
   const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
   const [prefinancings, setPrefinancings] = useState<Prefinancing[]>([]);
   const [employeeLoans, setEmployeeLoans] = useState<EmployeeLoan[]>([]);
+  const [notificationTranches, setNotificationTranches] = useState<NotificationTranche[]>([]);
+  const [subLineTransfers, setSubLineTransfers] = useState<SubLineTransfer[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<UserRole[]>([]);
   const { hasModuleAccess } = usePermissions();
@@ -437,6 +460,8 @@ function App() {
         employeeLoansData,
         usersData,
         rolesData,
+        tranchesData,
+        transfersData,
       ] = await Promise.all([
         grantsService.getAll(),
         budgetLinesService.getAll(),
@@ -448,7 +473,11 @@ function App() {
         employeeLoansService.getAll(),
         usersService.getAll(),
         rolesService.getAll(),
+        notificationTranchesService.getAll(),
+        subLineTransfersService.getAll(),
       ]);
+      setNotificationTranches(tranchesData);
+      setSubLineTransfers(transfersData);
 
       setGrants(grantsData);
       setBudgetLines(budgetLinesData);
@@ -804,6 +833,7 @@ function App() {
 
   const performGrantDeletion = async (id: string) => {
     try {
+      const grantToLog = grants.find(g => g.id === id);
       showLoading('Suppression de la subvention en cours...');
       const grantBudgetLines = budgetLines.filter(line => line.grantId === id);
       const grantSubBudgetLines = subBudgetLines.filter(subLine => 
@@ -833,6 +863,7 @@ function App() {
       for (const sub of grantSubBudgetLines) await subBudgetLinesService.delete(sub.id);
       for (const line of grantBudgetLines) await budgetLinesService.delete(line.id);
       await grantsService.delete(id);
+      if (grantToLog) logDelete('grant', id, grantToLog.name || grantToLog.reference || id, grantToLog, id);
 
       setBankTransactions(prev => prev.filter(t => !transactionsToDelete.some(d => d.id === t.id)));
       setPayments(prev => prev.filter(p => !paymentsToDelete.some(d => d.id === p.id)));
@@ -876,6 +907,7 @@ function App() {
       showLoading('Création de la subvention...');
       const newGrant = await grantsService.create({ ...grant, plannedAmount: 0 });
       setGrants(prev => [...prev, newGrant]);
+      logCreate('grant', newGrant.id, newGrant.name || newGrant.reference || newGrant.id, newGrant, newGrant.id);
       handleSelectGrant(newGrant.id);
       showSuccess('Subvention ajoutée', 'La nouvelle subvention a été créée avec succès');
     } catch (error) {
@@ -885,10 +917,62 @@ function App() {
     }
   };
 
+  // Journalise une modification dans l'historique d'audit (silencieux si rien n'a changé)
+  const logChange = (
+    entityType: ChangeHistoryEntry['entityType'],
+    entityId: string,
+    entityLabel: string,
+    oldObj: any,
+    updates: any,
+    grantId?: string
+  ) => {
+    const changes = computeChanges(oldObj, updates);
+    if (!changes.length) return;
+    changeHistoryService.record({
+      entityType, entityId, entityLabel, grantId, changes,
+      changedById: user?.id,
+      changedByName: userProfile ? `${userProfile.firstName} ${userProfile.lastName}` : (userProfile as any)?.email || 'Inconnu',
+    });
+  };
+
+  // Journalise une création (avec un instantané des valeurs initiales)
+  const logCreate = (
+    entityType: ChangeHistoryEntry['entityType'],
+    entityId: string,
+    entityLabel: string,
+    createdObj: any,
+    grantId?: string
+  ) => {
+    changeHistoryService.record({
+      entityType, entityId, entityLabel, grantId, action: 'create',
+      changes: buildCreateSnapshot(createdObj),
+      changedById: user?.id,
+      changedByName: userProfile ? `${userProfile.firstName} ${userProfile.lastName}` : (userProfile as any)?.email || 'Inconnu',
+    });
+  };
+
+  // Journalise une suppression (avec un instantané de ce qui existait)
+  const logDelete = (
+    entityType: ChangeHistoryEntry['entityType'],
+    entityId: string,
+    entityLabel: string,
+    deletedObj: any,
+    grantId?: string
+  ) => {
+    changeHistoryService.record({
+      entityType, entityId, entityLabel, grantId, action: 'delete',
+      changes: buildDeleteSnapshot(deletedObj),
+      changedById: user?.id,
+      changedByName: userProfile ? `${userProfile.firstName} ${userProfile.lastName}` : (userProfile as any)?.email || 'Inconnu',
+    });
+  };
+
   const handleUpdateGrant = async (id: string, updates: Partial<Grant>) => {
     try {
+      const old = grants.find(g => g.id === id);
       await grantsService.update(id, updates);
       setGrants(prev => prev.map(g => g.id === id ? { ...g, ...updates } : g));
+      if (old) logChange('grant', id, old.name || old.reference || id, old, updates, id);
       showSuccess('Subvention modifiée', 'Les modifications ont été enregistrées');
     } catch (error) {
       console.error('Erreur', 'Impossible de modifier la subvention');
@@ -907,6 +991,7 @@ function App() {
         availableAmount: budgetLine.notifiedAmount
       });
       setBudgetLines(prev => [...prev, newBudgetLine]);
+      logCreate('budget_line', newBudgetLine.id, `${newBudgetLine.code} — ${newBudgetLine.name}`, newBudgetLine, (newBudgetLine as any).grantId);
       showSuccess('Ligne budgétaire ajoutée', 'La nouvelle ligne budgétaire a été créée');
     } catch (error) {
       showError('Erreur', 'Impossible de créer la ligne budgétaire');
@@ -915,8 +1000,10 @@ function App() {
 
   const handleUpdateBudgetLine = async (id: string, updates: Partial<BudgetLine>) => {
     try {
+      const old = budgetLines.find(l => l.id === id);
       await budgetLinesService.update(id, updates);
       setBudgetLines(prev => prev.map(line => line.id === id ? { ...line, ...updates } : line));
+      if (old) logChange('budget_line', id, `${old.code} — ${old.name}`, old, updates, (old as any).grantId);
     } catch (error) {
       showError('Erreur', 'Impossible de modifier la ligne budgétaire');
     }
@@ -940,6 +1027,7 @@ function App() {
         availableAmount: subBudgetLine.notifiedAmount
       });
       setSubBudgetLines(prev => [...prev, newSubBudgetLine]);
+      logCreate('sub_budget_line', newSubBudgetLine.id, `${(newSubBudgetLine as any).code} — ${(newSubBudgetLine as any).name}`, newSubBudgetLine, (newSubBudgetLine as any).grantId);
       showSuccess('Sous-ligne budgétaire ajoutée', 'La nouvelle sous-ligne budgétaire a été créée');
     } catch (error) {
       showError('Erreur', 'Impossible de créer la sous-ligne budgétaire');
@@ -948,8 +1036,10 @@ function App() {
 
   const handleUpdateSubBudgetLine = async (id: string, updates: Partial<SubBudgetLine>) => {
     try {
+      const old = subBudgetLines.find(l => l.id === id);
       await subBudgetLinesService.update(id, updates);
       setSubBudgetLines(prev => prev.map(line => line.id === id ? { ...line, ...updates } : line));
+      if (old) logChange('sub_budget_line', id, `${(old as any).code} — ${(old as any).name}`, old, updates, (old as any).grantId);
     } catch (error) {
       showError('Erreur', 'Impossible de modifier la sous-ligne budgétaire');
     }
@@ -957,11 +1047,147 @@ function App() {
 
   const handleDeleteSubBudgetLine = async (id: string) => {
     try {
+      const old = subBudgetLines.find(l => l.id === id);
       await subBudgetLinesService.delete(id);
       setSubBudgetLines(prev => prev.filter(line => line.id !== id));
+      if (old) logDelete('sub_budget_line', id, `${(old as any).code} — ${(old as any).name}`, old, (old as any).grantId);
       showSuccess('Sous-ligne supprimée', 'La sous-ligne budgétaire a été supprimée');
     } catch (error) {
       showError('Erreur', 'Impossible de supprimer la sous-ligne budgétaire');
+    }
+  };
+
+  // ➕ Ajout d'une tranche de montant notifié (répartie sur les sous-lignes)
+  // Réessaie une écriture qui échoue pour une raison transitoire (réseau : « Failed to fetch »,
+  // timeout…). Les erreurs métier (permission, doublon, contrainte) ne sont PAS retentées.
+  const persistWithRetry = async <T,>(fn: () => Promise<T>, retries = 2): Promise<T> => {
+    let lastErr: any;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fn();
+      } catch (e: any) {
+        lastErr = e;
+        const msg = String(e?.message || e || '');
+        const transient = /failed to fetch|networkerror|network error|timeout|fetch|econn|load failed/i.test(msg);
+        if (!transient || attempt === retries) break;
+        await new Promise(res => setTimeout(res, 500 * (attempt + 1)));
+      }
+    }
+    throw lastErr;
+  };
+
+  const handleAddNotificationTranche = async (tranche: Omit<NotificationTranche, 'id' | 'createdAt'>) => {
+    // ⚠️ Robustesse : les écritures sont séquentielles (jamais en rafale) et l'ORDRE est
+    // volontaire — on applique d'abord les montants (sous-lignes → lignes → subvention),
+    // puis on crée l'enregistrement d'historique EN DERNIER. Ainsi, une coupure réseau
+    // (« Failed to fetch ») au milieu ne laisse jamais une tranche fantôme, et un nouvel
+    // essai (la modale travaille sur des montants CIBLES) ne fait que réappliquer l'écart
+    // restant. Le total de la subvention est RECALCULÉ depuis les lignes (idempotent).
+    try {
+      const dist = tranche.distribution || [];
+      const lineIncrements: Record<string, number> = {};
+
+      // 1) Sous-lignes
+      for (const d of dist) {
+        const sub = subBudgetLines.find(s => s.id === d.subBudgetLineId);
+        if (!sub || !d.amount) continue;
+        const newNotified = (sub.notifiedAmount || 0) + d.amount;
+        const newAvailable = Math.max(0, newNotified - (sub.engagedAmount || 0));
+        await persistWithRetry(() => subBudgetLinesService.update(sub.id, { notifiedAmount: newNotified, availableAmount: newAvailable }));
+        setSubBudgetLines(prev => prev.map(s => s.id === sub.id ? { ...s, notifiedAmount: newNotified, availableAmount: newAvailable } : s));
+        lineIncrements[sub.budgetLineId] = (lineIncrements[sub.budgetLineId] || 0) + d.amount;
+      }
+
+      // 2) Lignes budgétaires parentes
+      const newLineNotified: Record<string, number> = {};
+      for (const [lineId, inc] of Object.entries(lineIncrements)) {
+        const line = budgetLines.find(l => l.id === lineId);
+        if (!line) continue;
+        const newNotified = (line.notifiedAmount || 0) + inc;
+        const newAvailable = Math.max(0, newNotified - (line.engagedAmount || 0));
+        await persistWithRetry(() => budgetLinesService.update(lineId, { notifiedAmount: newNotified, availableAmount: newAvailable }));
+        setBudgetLines(prev => prev.map(l => l.id === lineId ? { ...l, notifiedAmount: newNotified, availableAmount: newAvailable } : l));
+        newLineNotified[lineId] = newNotified;
+      }
+
+      // 3) Subvention : total RECALCULÉ = somme des montants notifiés de ses lignes (idempotent)
+      const grant = grants.find(g => g.id === tranche.grantId);
+      let activated = false;
+      if (grant) {
+        const newTotal = budgetLines
+          .filter(l => l.grantId === grant.id)
+          .reduce((s, l) => s + (newLineNotified[l.id] !== undefined ? newLineNotified[l.id] : (l.notifiedAmount || 0)), 0);
+        const wasEmpty = (grant.totalAmount || 0) <= 0;
+        // Le 1er montant notifié active automatiquement une subvention encore « en attente »
+        const grantUpdates: Partial<Grant> = { totalAmount: newTotal };
+        if (wasEmpty && grant.status === 'pending') {
+          grantUpdates.status = 'active';
+          activated = true;
+        }
+        await persistWithRetry(() => grantsService.update(grant.id, grantUpdates));
+        setGrants(prev => prev.map(g => g.id === grant.id ? { ...g, ...grantUpdates } : g));
+      }
+
+      // 4) Historique EN DERNIER (non financier) — une éventuelle erreur ici ne fausse aucun montant
+      const created = await persistWithRetry(() => notificationTranchesService.create(tranche));
+      setNotificationTranches(prev => [...prev, created]);
+
+      showSuccess(
+        'Notification enregistrée',
+        activated
+          ? 'La tranche a été répartie et la subvention est désormais active.'
+          : 'La tranche de montant notifié a été ajoutée et répartie.'
+      );
+    } catch (error) {
+      console.error('Erreur tranche notification:', error);
+      showError('Erreur', "Impossible d'enregistrer la notification (problème réseau ?). Les montants déjà appliqués sont conservés — rouvrez la fenêtre et réessayez, seul l'écart restant sera ajouté.");
+      throw error; // laisse la modale ouverte pour un nouvel essai
+    }
+  };
+
+  // 🔁 Transfert de fonds d'une sous-ligne vers une autre
+  const handleAddSubLineTransfer = async (transfer: Omit<SubLineTransfer, 'id' | 'createdAt'>) => {
+    // Même logique de robustesse que les notifications : écritures séquentielles avec réessai,
+    // montants d'abord, enregistrement d'historique EN DERNIER, erreur propagée à la modale.
+    try {
+      const src = subBudgetLines.find(s => s.id === transfer.fromSubBudgetLineId);
+      const dst = subBudgetLines.find(s => s.id === transfer.toSubBudgetLineId);
+
+      if (src) {
+        const newNotified = Math.max(0, (src.notifiedAmount || 0) - transfer.amount);
+        const newAvailable = Math.max(0, newNotified - (src.engagedAmount || 0));
+        await persistWithRetry(() => subBudgetLinesService.update(src.id, { notifiedAmount: newNotified, availableAmount: newAvailable }));
+        setSubBudgetLines(prev => prev.map(s => s.id === src.id ? { ...s, notifiedAmount: newNotified, availableAmount: newAvailable } : s));
+      }
+      if (dst) {
+        const newNotified = (dst.notifiedAmount || 0) + transfer.amount;
+        const newAvailable = Math.max(0, newNotified - (dst.engagedAmount || 0));
+        await persistWithRetry(() => subBudgetLinesService.update(dst.id, { notifiedAmount: newNotified, availableAmount: newAvailable }));
+        setSubBudgetLines(prev => prev.map(s => s.id === dst.id ? { ...s, notifiedAmount: newNotified, availableAmount: newAvailable } : s));
+      }
+
+      // Ajustement des lignes budgétaires parentes (net par ligne)
+      const lineDeltas: Record<string, number> = {};
+      if (src) lineDeltas[src.budgetLineId] = (lineDeltas[src.budgetLineId] || 0) - transfer.amount;
+      if (dst) lineDeltas[dst.budgetLineId] = (lineDeltas[dst.budgetLineId] || 0) + transfer.amount;
+      for (const [lineId, delta] of Object.entries(lineDeltas)) {
+        if (delta === 0) continue;
+        const line = budgetLines.find(l => l.id === lineId);
+        if (!line) continue;
+        const newNotified = Math.max(0, (line.notifiedAmount || 0) + delta);
+        const newAvailable = Math.max(0, newNotified - (line.engagedAmount || 0));
+        await persistWithRetry(() => budgetLinesService.update(lineId, { notifiedAmount: newNotified, availableAmount: newAvailable }));
+        setBudgetLines(prev => prev.map(l => l.id === lineId ? { ...l, notifiedAmount: newNotified, availableAmount: newAvailable } : l));
+      }
+
+      // Historique EN DERNIER
+      const created = await persistWithRetry(() => subLineTransfersService.create(transfer));
+      setSubLineTransfers(prev => [...prev, created]);
+      showSuccess('Transfert effectué', 'Le transfert entre sous-lignes a été enregistré.');
+    } catch (error) {
+      console.error('Erreur transfert:', error);
+      showError('Erreur', "Impossible d'effectuer le transfert (problème réseau ?). Les montants déjà appliqués sont conservés — réessayez.");
+      throw error;
     }
   };
 
@@ -970,6 +1196,7 @@ function App() {
     try {
       const newEngagement = await engagementsService.create(engagement);
       setEngagements(prev => [...prev, newEngagement]);
+      logCreate('engagement', newEngagement.id, newEngagement.engagementNumber || newEngagement.id, newEngagement, newEngagement.grantId);
       // ✅ RECALCULER après ajout
       await recalculateSubBudgetLines();
       showSuccess('Engagement ajouté', 'Le nouvel engagement a été enregistré');
@@ -982,8 +1209,10 @@ function App() {
   // Modifier handleUpdateEngagement
   const handleUpdateEngagement = async (id: string, updates: Partial<Engagement>) => {
     try {
+      const old = engagements.find(e => e.id === id);
       await engagementsService.update(id, updates);
       setEngagements(prev => prev.map(eng => eng.id === id ? { ...eng, ...updates } : eng));
+      if (old) logChange('engagement', id, old.engagementNumber || id, old, updates, old.grantId);
       // ✅ RECALCULER après mise à jour
       await recalculateSubBudgetLines();
       showSuccess('Engagement modifié', 'Les modifications ont été enregistrées');
@@ -997,8 +1226,10 @@ function App() {
   // Modifier handleDeleteEngagement
   const handleDeleteEngagement = async (id: string) => {
     try {
+      const old = engagements.find(e => e.id === id);
       await engagementsService.delete(id);
       setEngagements(prev => prev.filter(eng => eng.id !== id));
+      if (old) logDelete('engagement', id, old.engagementNumber || id, old, old.grantId);
       // ✅ RECALCULER après suppression
       await recalculateSubBudgetLines();
       showSuccess('Engagement supprimé', 'L\'engagement a été supprimé avec succès');
@@ -1023,6 +1254,7 @@ function App() {
         if (paymentData.approvals?.supervisor2?.signature) finalApprovals.supervisor2 = paymentData.approvals.supervisor2;
         newPayment = await paymentsService.create({ ...paymentData, approvals: finalApprovals });
         setPayments(prev => [...prev, newPayment]);
+        logCreate('payment', newPayment.id, newPayment.paymentNumber || newPayment.id, newPayment, newPayment.grantId);
         showSuccess('Paiement ajouté', 'Le nouveau paiement a été enregistré avec succès.');
       }
       setShowPaymentForm(false);
@@ -1034,6 +1266,7 @@ function App() {
   };
 
   const handleUpdatePayment = async (id: string, updates: Partial<Payment>) => {
+    const oldPayment = payments.find(p => p.id === id);
     let finalUpdates: any = { ...updates };
     // Version camelCase pour la mise à jour réactive de l'état local
     const localUpdates: Partial<Payment> = { ...updates };
@@ -1073,6 +1306,7 @@ function App() {
       // comme pour la création d'un engagement. Les pages Trésorerie / Suivi /
       // Tableau de bord se recalculent à partir de l'état `payments`.
       setPayments(prev => prev.map(p => (p.id === id ? { ...p, ...localUpdates } : p)));
+      if (oldPayment) logChange('payment', id, oldPayment.paymentNumber || id, oldPayment, localUpdates, oldPayment.grantId);
       showSuccess('Succès', 'Le paiement a été mis à jour.');
     }
   };
@@ -1128,10 +1362,57 @@ function App() {
     }
   };
 
+  // Enregistre un mouvement bancaire (débit/crédit) SANS toast — utilisé pour les
+  // décaissements/remboursements de préfinancements et prêts, afin d'alimenter
+  // automatiquement la Trésorerie et de mettre à jour le solde de la subvention.
+  const recordBankMovement = async (mvt: { grantId: string; date: string; description: string; amount: number; type: 'credit' | 'debit'; reference: string }) => {
+    if (!mvt.grantId || !mvt.amount) return;
+    try {
+      const newTransaction = await bankTransactionsService.create(mvt);
+      setBankTransactions(prev => [...prev, newTransaction]);
+      const grant = grants.find(g => g.id === mvt.grantId);
+      if (grant && grant.bankAccount) {
+        const newBalance = mvt.type === 'credit'
+          ? grant.bankAccount.balance + mvt.amount
+          : grant.bankAccount.balance - mvt.amount;
+        const updatedAccount = { ...grant.bankAccount, balance: newBalance, lastUpdateDate: new Date().toISOString().split('T')[0] };
+        await grantsService.update(mvt.grantId, { bankAccount: updatedAccount });
+        setGrants(prev => prev.map(g => g.id === mvt.grantId && g.bankAccount ? { ...g, bankAccount: updatedAccount } : g));
+      }
+    } catch (e) {
+      console.warn('Mouvement bancaire automatique échoué', e);
+    }
+  };
+
+  const handleDeletePrefinancing = async (id: string) => {
+    try {
+      const old = prefinancings.find(p => p.id === id);
+      await prefinancingsService.delete(id);
+      setPrefinancings(prev => prev.filter(p => p.id !== id));
+      if (old) logDelete('prefinancing', id, old.prefinancingNumber || id, old, old.grantId);
+      showSuccess('Préfinancement supprimé', 'Le préfinancement a été supprimé avec succès');
+    } catch (error) {
+      showError('Erreur', 'Impossible de supprimer le préfinancement');
+    }
+  };
+
+  const handleDeleteEmployeeLoan = async (id: string) => {
+    try {
+      const old = employeeLoans.find(l => l.id === id);
+      await employeeLoansService.delete(id);
+      setEmployeeLoans(prev => prev.filter(l => l.id !== id));
+      if (old) logDelete('employee_loan', id, old.loanNumber || id, old, old.grantId);
+      showSuccess('Prêt supprimé', 'Le prêt employé a été supprimé avec succès');
+    } catch (error) {
+      showError('Erreur', 'Impossible de supprimer le prêt employé');
+    }
+  };
+
   const handleAddPrefinancing = async (prefinancing: Omit<Prefinancing, 'id'>) => {
     try {
       const newPrefinancing = await prefinancingsService.create(prefinancing);
       setPrefinancings(prev => [...prev, newPrefinancing]);
+      logCreate('prefinancing', newPrefinancing.id, newPrefinancing.prefinancingNumber || newPrefinancing.id, newPrefinancing, newPrefinancing.grantId);
       showSuccess('Préfinancement ajouté', 'La demande de préfinancement a été enregistrée');
     } catch (error) {
       showError('Erreur', 'Impossible de créer le préfinancement');
@@ -1140,8 +1421,28 @@ function App() {
 
   const handleUpdatePrefinancing = async (id: string, updates: Partial<Prefinancing>) => {
     try {
+      const old = prefinancings.find(p => p.id === id);
       await prefinancingsService.update(id, updates);
       setPrefinancings(prev => prev.map(pref => pref.id === id ? { ...pref, ...updates } : pref));
+      if (old) logChange('prefinancing', id, old.prefinancingNumber || id, old, updates, old.grantId);
+      // Décaissement : passage à « payé » → débit automatique en Trésorerie
+      if (old && old.status !== 'paid' && updates.status === 'paid') {
+        const today = new Date().toISOString().split('T')[0];
+        await recordBankMovement({
+          grantId: old.grantId, date: today,
+          description: `Décaissement préfinancement ${old.prefinancingNumber}`,
+          amount: old.amount, type: 'debit', reference: old.prefinancingNumber,
+        });
+        // Préfinancement entre subventions : créditer la subvention destinataire
+        if (old.purpose === 'between_grants' && old.targetGrant) {
+          const sourceName = grants.find(g => g.id === old.grantId)?.name || '';
+          await recordBankMovement({
+            grantId: old.targetGrant, date: today,
+            description: `Réception préfinancement ${old.prefinancingNumber}${sourceName ? ` (depuis ${sourceName})` : ''}`,
+            amount: old.amount, type: 'credit', reference: old.prefinancingNumber,
+          });
+        }
+      }
       showSuccess('Préfinancement modifié', 'Les modifications ont été enregistrées');
     } catch (error) {
       showError('Erreur', 'Impossible de modifier le préfinancement');
@@ -1157,9 +1458,23 @@ function App() {
       const totalRepaid = updatedRepayments.reduce((sum, rep) => sum + rep.amount, 0);
       const newStatus = totalRepaid >= prefinancing.amount ? 'repaid' : prefinancing.status;
       await prefinancingsService.update(prefinancingId, { repayments: updatedRepayments, status: newStatus });
-      setPrefinancings(prev => prev.map(pref => 
+      setPrefinancings(prev => prev.map(pref =>
         pref.id === prefinancingId ? { ...pref, repayments: updatedRepayments, status: newStatus } : pref
       ));
+      // Remboursement : entrée d'argent → crédit automatique en Trésorerie (subvention d'origine)
+      await recordBankMovement({
+        grantId: prefinancing.grantId, date: repayment.date,
+        description: `Remboursement préfinancement ${prefinancing.prefinancingNumber}`,
+        amount: repayment.amount, type: 'credit', reference: repayment.reference || prefinancing.prefinancingNumber,
+      });
+      // Entre subventions : la subvention destinataire restitue les fonds (débit)
+      if (prefinancing.purpose === 'between_grants' && prefinancing.targetGrant) {
+        await recordBankMovement({
+          grantId: prefinancing.targetGrant, date: repayment.date,
+          description: `Restitution préfinancement ${prefinancing.prefinancingNumber}`,
+          amount: repayment.amount, type: 'debit', reference: repayment.reference || prefinancing.prefinancingNumber,
+        });
+      }
       showSuccess('Remboursement ajouté', 'Le remboursement a été enregistré');
     } catch (error) {
       showError('Erreur', 'Impossible d\'ajouter le remboursement');
@@ -1170,6 +1485,7 @@ function App() {
     try {
       const newLoan = await employeeLoansService.create(loan);
       setEmployeeLoans(prev => [...prev, newLoan]);
+      logCreate('employee_loan', newLoan.id, newLoan.loanNumber || newLoan.id, newLoan, newLoan.grantId);
       showSuccess('Prêt employé ajouté', 'La demande de prêt a été enregistrée');
     } catch (error) {
       showError('Erreur', 'Impossible de créer le prêt employé');
@@ -1178,8 +1494,18 @@ function App() {
 
   const handleUpdateEmployeeLoan = async (id: string, updates: Partial<EmployeeLoan>) => {
     try {
+      const old = employeeLoans.find(l => l.id === id);
       await employeeLoansService.update(id, updates);
       setEmployeeLoans(prev => prev.map(loan => loan.id === id ? { ...loan, ...updates } : loan));
+      if (old) logChange('employee_loan', id, old.loanNumber || id, old, updates, old.grantId);
+      // Décaissement du prêt : passage à « en cours » (active) → débit automatique
+      if (old && old.status !== 'active' && updates.status === 'active') {
+        await recordBankMovement({
+          grantId: old.grantId, date: new Date().toISOString().split('T')[0],
+          description: `Décaissement prêt ${old.loanNumber} - ${old.employee?.name || ''}`.trim(),
+          amount: old.amount, type: 'debit', reference: old.loanNumber,
+        });
+      }
       showSuccess('Prêt employé modifié', 'Les modifications ont été enregistrées');
     } catch (error) {
       showError('Erreur', 'Impossible de modifier le prêt employé');
@@ -1195,9 +1521,15 @@ function App() {
       const totalRepaid = updatedRepayments.reduce((sum, rep) => sum + rep.amount, 0);
       const newStatus = totalRepaid >= loan.amount ? 'completed' : 'active';
       await employeeLoansService.update(loanId, { repayments: updatedRepayments, status: newStatus });
-      setEmployeeLoans(prev => prev.map(l => 
+      setEmployeeLoans(prev => prev.map(l =>
         l.id === loanId ? { ...l, repayments: updatedRepayments, status: newStatus } : l
       ));
+      // Remboursement du prêt : entrée d'argent → crédit automatique en Trésorerie
+      await recordBankMovement({
+        grantId: loan.grantId, date: repayment.date,
+        description: `Remboursement prêt ${loan.loanNumber} - ${loan.employee?.name || ''}`.trim(),
+        amount: repayment.amount, type: 'credit', reference: repayment.reference || loan.loanNumber,
+      });
       showSuccess('Remboursement ajouté', 'Le remboursement a été enregistré');
     } catch (error) {
       showError('Erreur', 'Impossible d\'ajouter le remboursement');
@@ -1332,9 +1664,9 @@ function App() {
   // ============================================================
   const menuItems = [
     { id: 'dashboard', label: 'Tableau de Bord', icon: BarChart3, module: 'dashboard' },
+    { id: 'tracking', label: 'Tableau de suivi budgétaire', icon: BarChart3, module: 'tracking' },
     { id: 'grants', label: 'Gestion des Subventions', icon: Banknote, module: 'grants' },
     { id: 'budget_planning', label: 'Planification', icon: Target, module: 'budget_planning' },
-    { id: 'tracking', label: 'Suivi Budgétaire', icon: BarChart3, module: 'tracking' },
     {
       id: 'engagements',
       label: 'Engagements',
@@ -1377,6 +1709,7 @@ function App() {
     { id: 'reports', label: 'Rapports', icon: FileText, module: 'reports' },
     { id: 'users', label: 'Utilisateurs', icon: Users, module: 'users' },
     { id: 'globalConfig', label: 'Configuration', icon: Settings, module: 'globalConfig' },
+    { id: 'history', label: 'Historique', icon: History, module: 'history' },
     { id: 'profile', label: 'Mon Profil', icon: Users, module: 'profile' }
   ];
 
@@ -1442,6 +1775,35 @@ function App() {
   }
 
   // ============================================================
+  // COMPTE DÉSACTIVÉ : aucun accès à la plateforme
+  // ============================================================
+  if (userProfile.isActive === false) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-red-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-xl border border-red-100 max-w-md w-full p-8 text-center">
+          <div className="flex items-center justify-center w-16 h-16 bg-red-100 rounded-2xl mx-auto mb-5">
+            <AlertTriangle className="w-8 h-8 text-red-600" />
+          </div>
+          <h1 className="text-xl font-bold text-gray-900 mb-2">Compte désactivé</h1>
+          <p className="text-gray-600 mb-1">
+            Votre compte <span className="font-medium">{userProfile.email}</span> n'est plus actif.
+          </p>
+          <p className="text-gray-600 mb-6">
+            Vous n'avez plus accès à la plateforme. Veuillez contacter un administrateur pour réactiver votre accès.
+          </p>
+          <button
+            onClick={handleLogout}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-red-600 text-white font-medium rounded-xl hover:bg-red-700 transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+            Se déconnecter
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================
   // RENDU PRINCIPAL
   // ============================================================
   return (
@@ -1471,9 +1833,11 @@ function App() {
               </div>
 
               {selectedGrant && (
-                <div 
-                  className="hidden md:flex items-center space-x-2 bg-white/10 backdrop-blur-sm px-3 py-1 rounded-xl border border-white/20 group relative"
-                  title={`Subvention active: ${selectedGrant.name}`}
+                <div
+                  onClick={() => { if (hasModuleAccess('globalConfig')) setActiveTab('globalConfig'); }}
+                  role={hasModuleAccess('globalConfig') ? 'button' : undefined}
+                  className={`hidden md:flex items-center space-x-2 bg-white/10 backdrop-blur-sm px-3 py-1 rounded-xl border border-white/20 group relative transition-colors ${hasModuleAccess('globalConfig') ? 'cursor-pointer hover:bg-white/20' : ''}`}
+                  title={hasModuleAccess('globalConfig') ? `Subvention active : ${selectedGrant.name} — cliquez pour changer de subvention` : `Subvention active : ${selectedGrant.name}`}
                 >
                   <Banknote className="w-4 h-4 text-indigo-200 flex-shrink-0" />
                   <div className="max-w-[180px]">
@@ -1484,6 +1848,9 @@ function App() {
                   </div>
                   <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 hidden group-hover:block bg-gray-900 text-white text-sm rounded-lg py-2 px-3 whitespace-normal max-w-xs text-center shadow-lg z-50 border border-gray-700">
                     {selectedGrant.name}
+                    {hasModuleAccess('globalConfig') && (
+                      <span className="block text-indigo-300 mt-1">Cliquez pour changer de subvention</span>
+                    )}
                     <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-b-gray-900"></div>
                   </div>
                 </div>
@@ -1562,7 +1929,7 @@ function App() {
       {/* Main Content */}
       <div className="flex flex-1 pt-16">
         {/* Sidebar */}
-        <div className={`${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} xl:translate-x-0 fixed xl:sticky top-16 left-0 h-[calc(100vh-4rem)] w-80 bg-gradient-to-b from-indigo-800 to-purple-900 dark:from-slate-900 dark:to-indigo-950 shadow-2xl border-r border-indigo-700/50 dark:border-slate-700/60 transform transition-transform duration-300 ease-in-out z-40 flex flex-col`}>
+        <div className={`${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} xl:translate-x-0 fixed xl:sticky top-16 left-0 h-[calc(100vh-4rem)] w-80 ${sidebarCollapsed ? 'xl:w-20' : 'xl:w-80'} bg-gradient-to-b from-indigo-800 to-purple-900 dark:from-slate-900 dark:to-indigo-950 shadow-2xl border-r border-indigo-700/50 dark:border-slate-700/60 transform transition-all duration-300 ease-in-out z-40 flex flex-col`}>
           {/* Mobile Header Info */}
           <div className="xl:hidden p-6 border-b border-indigo-700/50">
             <div className="flex items-center space-x-3 mb-4">
@@ -1588,14 +1955,27 @@ function App() {
             </div>
           </div>
 
+          {/* Bouton de réduction de la barre latérale (grand écran uniquement) */}
+          <div className={`hidden xl:flex ${sidebarCollapsed ? 'justify-center' : 'justify-end'} px-4 pt-4`}>
+            <button
+              onClick={() => setSidebarCollapsed(v => !v)}
+              className="p-2 text-indigo-200 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              title={sidebarCollapsed ? 'Agrandir le menu' : 'Réduire le menu'}
+              aria-label={sidebarCollapsed ? 'Agrandir le menu latéral' : 'Réduire le menu latéral'}
+            >
+              <ChevronLeft className={`w-5 h-5 transition-transform duration-300 ${sidebarCollapsed ? 'rotate-180' : ''}`} />
+            </button>
+          </div>
+
           {/* Navigation avec défilement */}
-          <nav className="flex-1 overflow-y-auto py-6 px-4">
+          <nav className={`flex-1 overflow-y-auto overflow-x-hidden py-4 ${sidebarCollapsed ? 'xl:px-2 px-4' : 'px-4'}`}>
             <div className="space-y-2">
               {availableMenuItems.map((item) => (
                 <MenuItemWithTooltip
                   key={item.id}
                   item={item}
                   isActive={activeTab === item.id}
+                  collapsed={sidebarCollapsed}
                   onClick={() => {
                     setActiveTab(item.id);
                     setIsMobileMenuOpen(false);
@@ -1638,9 +2018,9 @@ function App() {
 
         {/* Contenu principal */}
         <div className="flex-1 min-w-0 xl:ml-0">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className={`${sidebarCollapsed ? 'max-w-none' : 'max-w-7xl'} mx-auto px-4 sm:px-6 lg:px-8 py-8 transition-[max-width] duration-300`}>
             {activeTab === 'dashboard' && (
-              <Dashboard 
+              <Dashboard
                 grants={[selectedGrant].filter(Boolean) as Grant[]}
                 budgetLines={filteredData.budgetLines}
                 subBudgetLines={filteredData.subBudgetLines}
@@ -1648,6 +2028,7 @@ function App() {
                 prefinancings={prefinancings}
                 employeeLoans={employeeLoans}
                 engagements={filteredData.engagements}
+                onNavigate={setActiveTab}
               />
             )}
 
@@ -1664,9 +2045,11 @@ function App() {
                 onDeleteGrant={handleDeleteGrant}
                 onUpdateBudgetLine={handleUpdateBudgetLine}
                 onUpdateSubBudgetLine={handleUpdateSubBudgetLine}
+                onNavigate={setActiveTab}
+                onAddNotificationTranche={handleAddNotificationTranche}
               />
             )}
-            
+
             {activeTab === 'globalConfig' && (
               <GrantSelector
                 grants={grants}
@@ -1691,6 +2074,7 @@ function App() {
                 onUpdateSubBudgetLine={handleUpdateSubBudgetLine}
                 onDeleteBudgetLine={handleDeleteBudgetLine}
                 onDeleteSubBudgetLine={handleDeleteSubBudgetLine}
+                onAddSubLineTransfer={handleAddSubLineTransfer}
               />
             )}
 
@@ -1705,6 +2089,7 @@ function App() {
                 engagements={filteredData.engagements}
                 selectedGrantId={selectedGrantId}
                 onViewEngagements={handleViewEngagements}
+                onNavigate={setActiveTab}
               />
             )}
 
@@ -1761,6 +2146,7 @@ function App() {
                 onAddPrefinancing={handleAddPrefinancing}
                 onUpdatePrefinancing={handleUpdatePrefinancing}
                 onAddPrefinancingRepayment={handleAddPrefinancingRepayment}
+                onDeletePrefinancing={handleDeletePrefinancing}
               />
             )}
 
@@ -1775,6 +2161,7 @@ function App() {
                 onAddLoan={handleAddEmployeeLoan}
                 onUpdateLoan={handleUpdateEmployeeLoan}
                 onAddRepayment={handleAddEmployeeLoanRepayment}
+                onDeleteLoan={handleDeleteEmployeeLoan}
               />
             )}
 
@@ -1787,6 +2174,16 @@ function App() {
                 payments={filteredData.payments}
                 employeeLoans={filteredData.employeeLoans}
                 prefinancings={filteredData.prefinancings}
+                notificationTranches={notificationTranches.filter(t => t.grantId === selectedGrantId)}
+              />
+            )}
+
+            {activeTab === 'history' && (
+              <HistoryCenter
+                selectedGrant={selectedGrant}
+                notificationTranches={notificationTranches.filter(t => t.grantId === selectedGrantId)}
+                subLineTransfers={subLineTransfers.filter(t => t.grantId === selectedGrantId)}
+                subBudgetLines={filteredData.subBudgetLines}
               />
             )}
 

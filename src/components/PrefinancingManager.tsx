@@ -1,7 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, Plus, Edit, Trash2, FileText, Calendar, ArrowRightLeft, Download, Search, ChevronUp, ChevronDown, ChevronRight, ChevronLeft, Eye, User, CheckCircle, Clock, AlertCircle } from 'lucide-react';
-import { showSuccess, showValidationError, showWarning } from '../utils/alerts';
-import { Prefinancing, BudgetLine, Grant, PREFINANCING_STATUS, SubBudgetLine } from '../types';
+import { showSuccess, showValidationError, showWarning, confirmDelete } from '../utils/alerts';
+import { Prefinancing, BudgetLine, Grant, PREFINANCING_STATUS, SubBudgetLine, Attachment } from '../types';
+import { FileUploader, AttachmentList } from './AttachmentUploader';
+import { deleteAttachment } from '../services/storageService';
+import { exportListPDF, exportListExcel, fmtAmount } from '../utils/listExport';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { usePermissions } from '../hooks/usePermissions';
@@ -17,6 +20,7 @@ interface PrefinancingManagerProps {
   onAddPrefinancing: (prefinancing: Omit<Prefinancing, 'id'>) => void;
   onUpdatePrefinancing: (id: string, updates: Partial<Prefinancing>) => void;
   onAddPrefinancingRepayment: (prefinancingId: string, repayment: { date: string; amount: number; reference: string }) => void;
+  onDeletePrefinancing?: (id: string) => void;
 }
 
 const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
@@ -27,7 +31,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
   grants,
   onAddPrefinancing,
   onUpdatePrefinancing,
-  onAddPrefinancingRepayment
+  onAddPrefinancingRepayment,
+  onDeletePrefinancing
 }) => {
   // HOOKS D'AUTHENTIFICATION ET PERMISSIONS
   const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
@@ -43,6 +48,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
   const [showRepaymentForm, setShowRepaymentForm] = useState(false);
   const [selectedPrefinancing, setSelectedPrefinancing] = useState<Prefinancing | null>(null);
   const [editingPrefinancing, setEditingPrefinancing] = useState<Prefinancing | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [viewingPrefinancing, setViewingPrefinancing] = useState<Prefinancing | null>(null);
 
@@ -165,10 +171,10 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     } else if (userProfession === 'Comptable') {
       return !prefinancing.approvals?.supervisor2?.signature;
     } else if (userProfession === 'Coordonnateur National') {
+      // Reste dans « À signer » tant que c'est en attente : signe PUIS approuve/rejette.
       const hasSupervisor1Signed = prefinancing.approvals?.supervisor1?.signature;
       const hasSupervisor2Signed = prefinancing.approvals?.supervisor2?.signature;
-      const hasFinalSigned = prefinancing.approvals?.finalApproval?.signature;
-      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned);
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed);
     }
     return false;
   };
@@ -281,6 +287,53 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
   const canEdit = hasPermission('prefinancing', 'edit');
   const canDelete = hasPermission('prefinancing', 'delete');
   const canView = hasPermission('prefinancing', 'view');
+  const canExport = hasPermission('prefinancing', 'export') || canEdit;
+
+  // Exports de la liste des préfinancements
+  const exportPrefinancingsRows = () => sortedPrefinancings.map(p => [
+    p.prefinancingNumber,
+    new Date(p.date).toLocaleDateString('fr-FR'),
+    getPurposeLabel(p.purpose),
+    fmtAmount(p.amount),
+    fmtAmount(getTotalRepaid(p)),
+    fmtAmount(getRemainingAmount(p)),
+    p.expectedRepaymentDate ? new Date(p.expectedRepaymentDate).toLocaleDateString('fr-FR') : '-',
+    PREFINANCING_STATUS[p.status].label,
+  ]);
+  const exportPrefinancingsTotal = () => {
+    const amt = sortedPrefinancings.reduce((s, p) => s + p.amount, 0);
+    const rep = sortedPrefinancings.reduce((s, p) => s + getTotalRepaid(p), 0);
+    const rem = sortedPrefinancings.reduce((s, p) => s + getRemainingAmount(p), 0);
+    return ['TOTAUX', '', '', fmtAmount(amt), fmtAmount(rep), fmtAmount(rem), '', ''];
+  };
+  const exportPrefinancingsExcel = () => {
+    exportListExcel({
+      title: 'LISTE DES PRÉFINANCEMENTS',
+      subtitle: `${activeGrant?.name || ''} — Généré le ${new Date().toLocaleDateString('fr-FR')}`,
+      headers: ['N°', 'Date', 'Objet', 'Montant', 'Remboursé', 'Reste', 'Remb. prévu', 'Statut'],
+      rows: exportPrefinancingsRows(),
+      totalRow: exportPrefinancingsTotal(),
+      colWidths: [18, 14, 30, 16, 16, 16, 16, 14],
+      sheetName: 'Préfinancements',
+      filename: `prefinancements-${new Date().toISOString().split('T')[0]}.xlsx`,
+    });
+    showSuccess('Export réussi', 'La liste des préfinancements a été exportée.');
+  };
+  const exportPrefinancingsPDF = () => {
+    exportListPDF({
+      title: 'Liste des préfinancements',
+      subtitle: `${activeGrant?.name || ''} — Généré le ${new Date().toLocaleDateString('fr-FR')}`,
+      columns: [
+        { label: 'N°', width: 26 }, { label: 'Date', width: 20 }, { label: 'Objet', width: 40 },
+        { label: 'Montant', width: 24, align: 'right' }, { label: 'Remboursé', width: 24, align: 'right' },
+        { label: 'Reste', width: 24, align: 'right' }, { label: 'Remb. prévu', width: 22 }, { label: 'Statut', width: 20 },
+      ],
+      rows: exportPrefinancingsRows(),
+      totalRow: exportPrefinancingsTotal(),
+      filename: `prefinancements-${new Date().toISOString().split('T')[0]}.pdf`,
+    });
+    showSuccess('Export réussi', 'La liste des préfinancements a été exportée.');
+  };
 
   // Vérifier si une subvention active existe
   const activeGrant = grants.find(grant => grant.status === 'active');
@@ -398,6 +451,25 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     }
   };
 
+  // Suppression d'un préfinancement — uniquement si le statut est « En attente »
+  const handleDeletePrefinancing = async (prefinancing: Prefinancing) => {
+    if (prefinancing.status !== 'pending') {
+      showWarning('Suppression impossible', 'Seuls les préfinancements en attente peuvent être supprimés.');
+      return;
+    }
+    if (!canDelete) {
+      showWarning('Permission refusée', 'Vous n\'avez pas la permission de supprimer des préfinancements.');
+      return;
+    }
+    const confirmed = await confirmDelete(
+      'Supprimer le préfinancement',
+      `Êtes-vous sûr de vouloir supprimer le préfinancement ${prefinancing.prefinancingNumber} ? Cette action est irréversible.`
+    );
+    if (confirmed && onDeletePrefinancing) {
+      onDeletePrefinancing(prefinancing.id);
+    }
+  };
+
   const getSignatureIcon = (prefinancing: Prefinancing, signatureType: string) => {
     const approval = prefinancing.approvals?.[signatureType as keyof typeof prefinancing.approvals];
     if (approval?.signature) {
@@ -472,6 +544,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
       supervisor2: false,
       finalApproval: false
     });
+    setAttachments([]);
     setShowForm(false);
     setEditingPrefinancing(null);
   };
@@ -666,8 +739,9 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
         subBudgetLineId: formData.subBudgetLineId || undefined,
         amount: parseFloat(formData.amount),
         description: formData.description,
-        date: formData.date,
-        expectedRepaymentDate: formData.expectedRepaymentDate,
+        // Ne pas écraser les dates existantes si les champs sont laissés vides en modification
+        date: formData.date || editingPrefinancing.date,
+        expectedRepaymentDate: formData.expectedRepaymentDate || editingPrefinancing.expectedRepaymentDate,
         purpose: formData.purpose,
         targetGrant: formData.targetGrant || undefined,
         status: formData.status,
@@ -677,7 +751,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
           amount: parseFloat(exp.amount),
           description: exp.description
         })),
-        approvals: approvalData
+        approvals: approvalData,
+        attachments
       };
 
       onUpdatePrefinancing(editingPrefinancing.id, updates);
@@ -703,7 +778,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
           description: exp.description
         })),
         approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined,
-        repayments: []
+        repayments: [],
+        attachments
       };
 
       onAddPrefinancing(newPrefinancing);
@@ -1122,6 +1198,16 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
             </button>
           )}
           
+          {canExport && sortedPrefinancings.length > 0 && (
+            <>
+              <button onClick={exportPrefinancingsPDF} className="bg-red-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-red-700 flex items-center space-x-2">
+                <Download className="w-4 h-4" /><span>PDF</span>
+              </button>
+              <button onClick={exportPrefinancingsExcel} className="bg-green-700 text-white px-4 py-2 rounded-xl font-medium hover:bg-green-800 flex items-center space-x-2">
+                <Download className="w-4 h-4" /><span>Excel</span>
+              </button>
+            </>
+          )}
           {canCreate && (
             <button
               onClick={() => setShowForm(true)}
@@ -1528,6 +1614,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                               onClick={() => {
                                 const prefinancingToEdit = prefinancing;
                                 setEditingPrefinancing(prefinancingToEdit);
+                                setAttachments(prefinancingToEdit.attachments || []);
                                 setFormData({
                                   grantId: prefinancingToEdit.grantId,
                                   budgetLineId: prefinancingToEdit.budgetLineId || '',
@@ -1583,14 +1670,16 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                             >
                               <Eye className="w-4 h-4" />
                             </button>
-                            
-                            // <button
-                            //   onClick={() => setViewingPrefinancing(prefinancing)}
-                            //   className="p-2 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                            //   title="Voir les détails"
-                            // >
-                            //   <Eye className="w-4 h-4" />
-                            // </button>
+                          )}
+
+                          {prefinancing.status === 'pending' && canDelete && onDeletePrefinancing && (
+                            <button
+                              onClick={() => handleDeletePrefinancing(prefinancing)}
+                              className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Supprimer (uniquement en attente)"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           )}
                         </div>
                       </td>
@@ -2348,28 +2437,30 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Date *
+                      Date {!editingPrefinancing && '*'}
                     </label>
                     <input
                       type="date"
                       value={formData.date}
                       onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
+                      required={!editingPrefinancing}
                     />
+                    {editingPrefinancing && <p className="text-xs text-gray-400 mt-1">Laissez vide pour conserver la date actuelle.</p>}
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Date prévisionnelle de remboursement*
+                      Date prévisionnelle de remboursement {!editingPrefinancing && '*'}
                     </label>
                     <input
                       type="date"
                       value={formData.expectedRepaymentDate}
                       onChange={(e) => setFormData(prev => ({ ...prev, expectedRepaymentDate: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
+                      required={!editingPrefinancing}
                     />
+                    {editingPrefinancing && <p className="text-xs text-gray-400 mt-1">Laissez vide pour conserver la date actuelle.</p>}
                   </div>
                 </div>
 
@@ -2848,6 +2939,17 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                 </div>
               )}
 
+              {/* Documents physiques liés au préfinancement */}
+              <div className="bg-gray-50 rounded-xl p-6">
+                <FileUploader
+                  value={attachments}
+                  onChange={setAttachments}
+                  folder="prefinancing"
+                  label="Documents physiques (optionnel)"
+                  canRemove={editingPrefinancing ? (canDelete && editingPrefinancing.status === 'pending') : true}
+                />
+              </div>
+
               <div className="flex space-x-3 pt-4">
                 <button
                   type="button"
@@ -3274,6 +3376,21 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                   </div>
                 </div>
               </div>
+
+              {viewingPrefinancing.attachments && viewingPrefinancing.attachments.length > 0 && (
+                <div>
+                  <AttachmentList
+                    attachments={viewingPrefinancing.attachments}
+                    title="Documents associés"
+                    onDelete={(canDelete && viewingPrefinancing.status === 'pending') ? (att) => {
+                      const updated = (viewingPrefinancing.attachments || []).filter(a => a.id !== att.id);
+                      onUpdatePrefinancing(viewingPrefinancing.id, { attachments: updated });
+                      setViewingPrefinancing({ ...viewingPrefinancing, attachments: updated });
+                      deleteAttachment(att.path);
+                    } : undefined}
+                  />
+                </div>
+              )}
 
               {viewingPrefinancing.expenses && viewingPrefinancing.expenses.length > 0 && (
                 <div>

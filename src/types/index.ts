@@ -56,6 +56,7 @@ export interface BudgetLine {
   availableAmount: number;
   description?: string;
   color: string;
+  accountingAccount?: string; // numéro de compte comptable (charge) pour l'export comptable
 }
 
 export interface SubBudgetLine {
@@ -70,6 +71,32 @@ export interface SubBudgetLine {
   spentAmount: number;
   availableAmount: number;
   description?: string;
+  accountingAccount?: string; // numéro de compte comptable (charge) — prioritaire sur la ligne parente
+}
+
+// Journal d'audit : historique des modifications d'un élément après sa création
+export interface ChangeHistoryEntry {
+  id: string;
+  entityType: 'grant' | 'budget_line' | 'sub_budget_line' | 'engagement' | 'payment' | 'prefinancing' | 'employee_loan';
+  entityId: string;
+  entityLabel: string;      // libellé lisible (n° engagement, nom subvention…)
+  grantId?: string;         // pour filtrer par subvention
+  action: 'create' | 'update' | 'delete';
+  changes: { field: string; oldValue: any; newValue: any }[];
+  changedById?: string;
+  changedByName: string;
+  createdAt: string;
+}
+
+// Fichier physique associé (proforma, facture, fiche signée…) stocké dans Supabase Storage
+export interface Attachment {
+  id: string;
+  name: string;      // nom d'origine du fichier
+  path: string;      // chemin dans le bucket (pour suppression)
+  url: string;       // URL publique de téléchargement
+  size?: number;     // taille en octets
+  type?: string;     // type MIME
+  uploadedAt: string;
 }
 
 export interface Engagement {
@@ -98,13 +125,14 @@ export interface Engagement {
       signature: boolean; 
       observation?: string 
     };
-    finalApproval?: { 
-      name: string; 
-      date: string; 
-      signature: boolean; 
-      observation?: string 
+    finalApproval?: {
+      name: string;
+      date: string;
+      signature: boolean;
+      observation?: string
     };
   };
+  attachments?: Attachment[]; // proformas / documents physiques liés
 }
 
 // ************************************Payment**************
@@ -155,6 +183,7 @@ export interface Payment {
   // Nouveaux champs pour le suivi des paiements échelonnés
   partialPayments?: PartialPayment[];
   remainingAmount?: number;
+  attachments?: Attachment[]; // fiche de paiement physique / documents liés
 }
 
 
@@ -169,6 +198,7 @@ export interface PartialPayment {
   reference: string;
   cashedDate?: string;
   transactionId?: string; // Référence vers la transaction bancaire
+  attachments?: Attachment[]; // fichier lié à ce versement échelonné
 }
 
 
@@ -232,13 +262,14 @@ export interface Prefinancing {
       signature: boolean; 
       observation?: string 
     };
-    finalApproval?: { 
-      name: string; 
-      date: string; 
-      signature: boolean; 
-      observation?: string 
+    finalApproval?: {
+      name: string;
+      date: string;
+      signature: boolean;
+      observation?: string
     };
   };
+  attachments?: Attachment[]; // documents physiques liés au préfinancement
 }
 
 export interface EmployeeLoan {
@@ -280,13 +311,40 @@ export interface EmployeeLoan {
       signature: boolean; 
       observation?: string 
     };
-    finalApproval?: { 
-      name: string; 
-      date: string; 
-      signature: boolean; 
-      observation?: string 
+    finalApproval?: {
+      name: string;
+      date: string;
+      signature: boolean;
+      observation?: string
     };
   };
+  attachments?: Attachment[]; // documents physiques liés au prêt employé
+}
+
+// Tranche de montant notifié reçue pour une subvention (traçabilité des notifications)
+export interface NotificationTranche {
+  id: string;
+  grantId: string;
+  amount: number;
+  date: string;
+  distributionMode: 'same' | 'custom'; // même répartition que la 1ère tranche, ou personnalisée
+  distribution?: { subBudgetLineId: string; amount: number }[]; // répartition sur les sous-lignes
+  note?: string;
+  createdBy?: string;
+  createdAt: string;
+}
+
+// Transfert de fonds d'une sous-ligne budgétaire vers une autre
+export interface SubLineTransfer {
+  id: string;
+  grantId: string;
+  fromSubBudgetLineId: string;
+  toSubBudgetLineId: string;
+  amount: number;
+  date: string;
+  reason?: string;
+  createdBy?: string;
+  createdAt: string;
 }
 
 export const DEFAULT_BUDGET_LINES: Omit<BudgetLine, 'id' | 'grantId'>[] = [

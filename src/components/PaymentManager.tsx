@@ -6,11 +6,13 @@ import {
   ChevronsUpDown
 } from 'lucide-react';
 import { showWarning, showSuccess, showValidationError, showError } from '../utils/alerts';
-import { Payment, Engagement, BudgetLine, SubBudgetLine, Grant, BankAccount, PAYMENT_STATUS, PartialPayment } from '../types';
+import { Payment, Engagement, BudgetLine, SubBudgetLine, Grant, BankAccount, PAYMENT_STATUS, PartialPayment, Attachment } from '../types';
+import { FileUploader } from './AttachmentUploader';
 import { usePermissions } from '../hooks/usePermissions';
 import { useAuth } from '../hooks/useAuth';
 import jsPDF from 'jspdf';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
+import { styleTitle, styleHeaderRow, styleDataRows, styleTotalRow } from '../utils/excelStyle';
 import { usePaymentNotifications } from '../hooks/usePaymentNotifications';
 
 interface PaymentManagerProps {
@@ -107,6 +109,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     bankReference: '',
     reference: ''
   });
+  const [partialAttachments, setPartialAttachments] = useState<Attachment[]>([]);
 
   const [approvals, setApprovals] = useState<any>({
     supervisor1: { name: '', signature: false, observation: '' },
@@ -185,30 +188,12 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   };
 
 
-  // Vérifier si l'utilisateur peut modifier un paiement
-  const canEditPayment = (payment: Payment): boolean => {
-    // Si l'utilisateur n'a pas la permission d'édition
-    if (!canEdit) return false;
-    
-    const userProfession = getUserProfession();
-    const isComptable = userProfession === 'Comptable';
-    
-    // Paiement en attente ou rejeté → tout le monde avec permission edit peut modifier
-    if (payment.status === 'pending' || payment.status === 'rejected') {
-      return true;
-    }
-    
-    // Paiement approuvé ou en cours → uniquement le comptable
-    if (payment.status === 'approved' || payment.status === 'in_progress') {
-      return isComptable;
-    }
-    
-    // Paiement payé → personne ne peut modifier
-    if (payment.status === 'paid') {
-      return false;
-    }
-    
-    return false;
+  // L'icône d'accès à la modification s'affiche pour TOUS ceux qui ont le rôle
+  // « Modifier », quel que soit le statut. Le droit de SOUMETTRE la modification
+  // est ensuite contrôlé dans le formulaire (réservé au comptable si le statut
+  // n'est plus « En attente »).
+  const canEditPayment = (_payment: Payment): boolean => {
+    return canEdit;
   };
 
 
@@ -220,10 +205,13 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     } else if (userProfession === 'Comptable') {
       return !payment.approvals?.supervisor2?.signature;
     } else if (userProfession === 'Coordonnateur National') {
+      // Le coordonnateur (dernier signataire) reste dans « À signer » tant que
+      // l'élément est en attente : il doit signer PUIS approuver/rejeter.
+      // La sortie de la liste se fait quand le statut n'est plus « pending »
+      // (le filtre « À signer » exige déjà status === 'pending').
       const hasSupervisor1Signed = payment.approvals?.supervisor1?.signature;
       const hasSupervisor2Signed = payment.approvals?.supervisor2?.signature;
-      const hasFinalSigned = payment.approvals?.finalApproval?.signature;
-      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned);
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed);
     }
     return false;
   };
@@ -264,7 +252,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   const canEdit = hasPermission('payments', 'edit');
   const canDelete = hasPermission('payments', 'delete');
   const canView = hasPermission('payments', 'view');
-  const canExport = hasPermission('payments', 'edit');
+  const canExport = hasPermission('payments', 'export');
 
   const userProfession = getUserProfession();
   const userFullName = getUserFullName();
@@ -488,12 +476,14 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
       }
     };
 
-    if (signatureType === 'finalApproval') {
-      updates.status = 'approved';
-    }
-
+    // Note : la signature finale n'approuve plus automatiquement. Le coordonnateur
+    // doit ensuite approuver OU rejeter — l'élément reste dans « À signer » jusque-là.
     onUpdatePayment(payment.id, updates);
-    showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès.');
+    if (signatureType === 'finalApproval') {
+      showSuccess('Signature enregistrée', 'Signature enregistrée. Vous pouvez maintenant approuver ou rejeter ce paiement.');
+    } else {
+      showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès.');
+    }
   };
 
   // Fonction pour ajouter un paiement partiel
@@ -529,7 +519,8 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
       paymentMethod: partialPaymentData.paymentMethod,
       checkNumber: partialPaymentData.checkNumber || undefined,
       bankReference: partialPaymentData.bankReference || undefined,
-      reference: partialPaymentData.reference
+      reference: partialPaymentData.reference,
+      attachments: partialAttachments
     };
 
     // Ajouter le paiement partiel
@@ -582,6 +573,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
       bankReference: '',
       reference: ''
     });
+    setPartialAttachments([]);
     setShowPartialPaymentForm(false);
     setSelectedPaymentForPartial(null);
   };
@@ -915,7 +907,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
 
       // En-tête du tableau
       const headerHeight = 7;
-      pdf.setFillColor(59, 130, 246);
+      pdf.setFillColor(79, 70, 229);
       pdf.rect(margin, yPosition, totalWidth, headerHeight, 'F');
       pdf.setTextColor(255, 255, 255);
       pdf.setFontSize(6);
@@ -992,7 +984,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
           pdf.line(margin, yPosition, pageWidth - margin, yPosition);
           yPosition += 2;
           
-          pdf.setFillColor(59, 130, 246);
+          pdf.setFillColor(79, 70, 229);
           pdf.rect(margin, yPosition, totalWidth, headerHeight, 'F');
           pdf.setTextColor(255, 255, 255);
           pdf.setFontSize(6);
@@ -1101,21 +1093,31 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
 
       const totalAmount = dataToExport.reduce((sum, eng) => sum + eng.amount, 0);
       const totalPaidAmount = dataToExport.reduce((sum, eng) => sum + getTotalPaid(eng), 0);
+      const totalRemainingAmount = dataToExport.reduce((sum, eng) => sum + getRemainingAmount(eng), 0);
+      const overallProgress = totalAmount > 0 ? (totalPaidAmount / totalAmount) * 100 : 0;
 
-      pdf.setFillColor(243, 244, 246);
+      pdf.setFillColor(224, 231, 255);
       pdf.rect(margin, yPosition, totalWidth, 7, 'F');
       pdf.setFont('helvetica', 'bold');
       pdf.setFontSize(6);
+      pdf.setTextColor(79, 70, 229);
 
       xPos = margin;
       const totalLabelWidth = columnWidths[0] + columnWidths[1] + columnWidths[2] + columnWidths[3] + columnWidths[4] + columnWidths[5];
       pdf.text('TOTAL', xPos + 1, yPosition + 4.5);
       xPos += totalLabelWidth;
-      
+
       pdf.text(`${formatAmount(totalAmount)} ${currencySymbol}`, xPos + columnWidths[6] - 1, yPosition + 4.5, { align: 'right' });
       xPos += columnWidths[6];
-      
+
       pdf.text(`${formatAmount(totalPaidAmount)} ${currencySymbol}`, xPos + columnWidths[7] - 1, yPosition + 4.5, { align: 'right' });
+      xPos += columnWidths[7];
+
+      pdf.text(`${formatAmount(totalRemainingAmount)} ${currencySymbol}`, xPos + columnWidths[8] - 1, yPosition + 4.5, { align: 'right' });
+      xPos += columnWidths[8];
+
+      pdf.text(`${overallProgress.toFixed(0)}%`, xPos + columnWidths[9] - 1, yPosition + 4.5, { align: 'right' });
+      pdf.setTextColor(0, 0, 0);
 
       // Numéros de page en bas
       const pageCount = pdf.getNumberOfPages();
@@ -1180,6 +1182,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
       rows.push([`Généré le: ${new Date().toLocaleDateString('fr-FR')}`]);
       rows.push([]);
 
+      const headerRowIdx = rows.length;
       rows.push([
         'N° Paiement',
         'Date',
@@ -1194,8 +1197,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
         'Progression',
         'Statut'
       ]);
-
-      rows.push(['---', '---', '---', '---', '---', '---', '---', '---', '---', '---', '---', '---']);
+      const firstDataRow = rows.length;
 
       const statusLabels: Record<string, string> = {
         pending: 'En attente',
@@ -1231,11 +1233,13 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
         ]);
       });
 
-      rows.push(['---', '---', '---', '---', '---', '---', '---', '---', '---', '---', '---', '---']);
+      const lastDataRow = rows.length - 1;
 
       const totalAmount = dataToExport.reduce((sum, eng) => sum + eng.amount, 0);
       const totalPaidAmount = dataToExport.reduce((sum, eng) => sum + getTotalPaid(eng), 0);
-      
+      const totalRemainingAmount = dataToExport.reduce((sum, eng) => sum + getRemainingAmount(eng), 0);
+      const overallProgress = totalAmount > 0 ? (totalPaidAmount / totalAmount) * 100 : 0;
+
       rows.push([
         'TOTAUX',
         '',
@@ -1246,28 +1250,25 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
         '',
         `${totalAmount.toLocaleString('fr-FR')} ${currencySymbol}`,
         `${totalPaidAmount.toLocaleString('fr-FR')} ${currencySymbol}`,
-        '',
-        '',
+        `${totalRemainingAmount.toLocaleString('fr-FR')} ${currencySymbol}`,
+        `${overallProgress.toFixed(1)}%`,
         ''
       ]);
+      const totalRowIdx = rows.length - 1;
 
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.aoa_to_sheet(rows);
 
       ws['!cols'] = [
-        { wch: 18 },
-        { wch: 15 },
-        { wch: 18 },
-        { wch: 30 },
-        { wch: 30 },
-        { wch: 25 },
-        { wch: 50 },
-        { wch: 18 },
-        { wch: 18 },
-        { wch: 18 },
-        { wch: 12 },
-        { wch: 15 }
+        { wch: 18 }, { wch: 15 }, { wch: 18 }, { wch: 30 }, { wch: 30 }, { wch: 25 },
+        { wch: 50 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 15 }
       ];
+
+      const NCOLS = 12;
+      styleTitle(ws, 0, NCOLS);
+      styleHeaderRow(ws, headerRowIdx, NCOLS);
+      styleDataRows(ws, firstDataRow, lastDataRow, NCOLS);
+      styleTotalRow(ws, totalRowIdx, NCOLS);
 
       const sheetName = exportAllData ? 'Tous les paiements' : 'Paiements page';
       XLSX.utils.book_append_sheet(wb, ws, sheetName);
@@ -2243,12 +2244,21 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                 />
               </div>
 
+              {/* Fichier associé à ce versement échelonné */}
+              <FileUploader
+                value={partialAttachments}
+                onChange={setPartialAttachments}
+                folder="payments/partial"
+                label="Fichier associé à ce versement (optionnel)"
+              />
+
               <div className="flex space-x-3 pt-4">
                 <button
                   type="button"
                   onClick={() => {
                     setShowPartialPaymentForm(false);
                     setSelectedPaymentForPartial(null);
+                    setPartialAttachments([]);
                   }}
                   className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
                 >

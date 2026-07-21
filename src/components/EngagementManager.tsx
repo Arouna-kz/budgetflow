@@ -5,12 +5,15 @@ import {
   Calendar, Filter, FileSpreadsheet, Circle, CircleDot, AlertOctagon, Users, UserPlus
 } from 'lucide-react';
 import { showValidationError, showWarning, showSuccess, confirmDelete, showError } from '../utils/alerts';
-import { Engagement, BudgetLine, SubBudgetLine, Grant, ENGAGEMENT_STATUS } from '../types';
+import { Engagement, BudgetLine, SubBudgetLine, Grant, ENGAGEMENT_STATUS, Attachment } from '../types';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
+import { styleTitle, styleHeaderRow, styleDataRows, styleTotalRow } from '../utils/excelStyle';
 import { usePermissions } from '../hooks/usePermissions';
 import { useAuth } from '../hooks/useAuth';
+import { AttachmentList, FileUploader } from './AttachmentUploader';
+import { deleteAttachment } from '../services/storageService';
 
 // ------------------------------------------------------------------
 // COMPOSANT FOURNISSEUR SÉPARÉ (avec gestion interne du focus)
@@ -368,6 +371,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     status: 'pending' as Engagement['status']
   });
 
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [availableAmount, setAvailableAmount] = useState<number>(0);
   const [exceedsAvailableAmount, setExceedsAvailableAmount] = useState<boolean>(false);
 
@@ -466,10 +470,11 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     } else if (userProfession === 'Comptable') {
       return !engagement.approvals?.supervisor2?.signature;
     } else if (userProfession === 'Coordonnateur National') {
+      // Reste dans « À signer » tant que l'engagement est en attente : le
+      // coordonnateur signe PUIS approuve/rejette (le filtre exige status 'pending').
       const hasSupervisor1Signed = engagement.approvals?.supervisor1?.signature;
       const hasSupervisor2Signed = engagement.approvals?.supervisor2?.signature;
-      const hasFinalSigned = engagement.approvals?.finalApproval?.signature;
-      return hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned;
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed);
     }
     return false;
   };
@@ -585,27 +590,11 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
   // 🎯 VÉRIFICATION DE L'UNICITÉ DU NUMÉRO DE FACTURE
 
-  const checkInvoiceNumberUniqueness = (invoiceNumber: string) => {
-    if (!invoiceNumber || !invoiceNumber.trim()) {
-      setInvoiceNumberExists(false);
-      setExistingInvoiceEngagement(null);
-      return;
-    }
-
-    const trimmedInvoice = invoiceNumber.trim();
-    const existing = engagements.find(e =>
-      e.invoiceNumber &&
-      e.invoiceNumber.toLowerCase() === trimmedInvoice.toLowerCase() &&
-      (!editingEngagement || e.id !== editingEngagement.id)
-    );
-
-    if (existing) {
-      setInvoiceNumberExists(true);
-      setExistingInvoiceEngagement(existing);
-    } else {
-      setInvoiceNumberExists(false);
-      setExistingInvoiceEngagement(null);
-    }
+  // Le numéro de facture est désormais facultatif ET non unique :
+  // on ne signale plus aucun doublon de facture.
+  const checkInvoiceNumberUniqueness = (_invoiceNumber: string) => {
+    setInvoiceNumberExists(false);
+    setExistingInvoiceEngagement(null);
   };
 
   // 🎯 VALIDATION FINALE AVANT SOUMISSION
@@ -617,12 +606,10 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       const sameSupplier = engagement.supplier?.toLowerCase() === formData.supplier.toLowerCase();
       const sameAmount = Math.abs(engagement.amount - parseFloat(formData.amount)) < 0.01;
       const sameSubLine = engagement.subBudgetLineId === formData.subBudgetLineId;
-      const sameInvoice = engagement.invoiceNumber && formData.invoiceNumber &&
-        engagement.invoiceNumber.toLowerCase() === formData.invoiceNumber.toLowerCase();
       const sameQuote = engagement.quoteReference && formData.quoteReference &&
         engagement.quoteReference.toLowerCase() === formData.quoteReference.toLowerCase();
 
-      if (sameInvoice) return true;
+      // Le numéro de facture n'est plus un critère de doublon (facultatif et non unique)
       if (sameQuote) return true;
       if (sameSupplier && sameAmount && sameSubLine) return true;
 
@@ -773,7 +760,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   const canEdit = hasPermission('engagements', 'edit');
   const canDelete = hasPermission('engagements', 'delete');
   const canView = hasPermission('engagements', 'view');
-  const canExport = hasPermission('engagements', 'edit');
+  const canExport = hasPermission('engagements', 'export');
 
   const activeGrant = grants.find(grant => grant.status === 'active');
   const canCreateEngag = canCreate && activeGrant;
@@ -903,6 +890,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       supervisor2: false,
       finalApproval: false
     });
+    setAttachments([]);
     setAvailableAmount(0);
     setExceedsAvailableAmount(false);
     setShowForm(false);
@@ -959,11 +947,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       return;
     }
 
-    // ✅ Vérification du numéro de facture (obligatoire)
-    if (!formData.invoiceNumber || !formData.invoiceNumber.trim()) {
-      showValidationError('Numéro de facture requis', 'Le numéro de facture est obligatoire. Veuillez saisir un numéro de facture valide.');
-      return;
-    }
+    // Le numéro de facture est facultatif et non unique : aucune validation ici.
 
     const amountValue = parseFloat(formData.amount);
     if (amountValue > availableAmount) {
@@ -1042,7 +1026,8 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
           invoiceNumber: formData.invoiceNumber.trim(),
           date: formData.date,
           status: statusToSave,
-          approvals: approvalData
+          approvals: approvalData,
+          attachments
         });
         showSuccess('Engagement modifié', 'L\'engagement a été modifié avec succès');
       } else {
@@ -1064,7 +1049,8 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
           invoiceNumber: formData.invoiceNumber.trim(),
           date: formData.date,
           status: formData.status,
-          approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined
+          approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined,
+          attachments
         });
         showSuccess('Engagement créé', 'L\'engagement a été créé avec succès');
       }
@@ -1097,6 +1083,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       date: engagement.date,
       status: engagement.status
     });
+    setAttachments(engagement.attachments || []);
 
     if (engagement.approvals) {
       setApprovals({
@@ -1653,6 +1640,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       rows.push([`Généré le: ${new Date().toLocaleDateString('fr-FR')}`]);
       rows.push([]);
 
+      const headerRowIdx = rows.length;
       rows.push([
         'N° Engagement',
         'Date',
@@ -1665,8 +1653,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
         'N° Facture',
         'Statut'
       ]);
-
-      rows.push(['---', '---', '---', '---', '---', '---', '---', '---', '---', '---']);
+      const firstDataRow = rows.length;
 
       const statusLabels: Record<string, string> = {
         pending: 'En attente',
@@ -1696,9 +1683,13 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
         ]);
       });
 
-      rows.push(['---', '---', '---', '---', '---', '---', '---', '---', '---', '---']);
+      const lastDataRow = rows.length - 1;
 
       const totalAmount = dataToExport.reduce((sum, eng) => sum + eng.amount, 0);
+      // Disponible cohérent : on somme le disponible des sous-lignes DISTINCTES (sinon
+      // une sous-ligne présente sur plusieurs engagements serait comptée plusieurs fois).
+      const distinctSubLineIds = Array.from(new Set(dataToExport.map(e => e.subBudgetLineId)));
+      const totalAvailable = distinctSubLineIds.reduce((s, id) => s + getAvailableAmountForSubLine(id), 0);
       rows.push([
         'TOTAUX',
         '',
@@ -1707,26 +1698,25 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
         '',
         '',
         `${totalAmount.toLocaleString('fr-FR')} ${currencySymbol}`,
-        '',
+        `${totalAvailable.toLocaleString('fr-FR')} ${currencySymbol}`,
         '',
         ''
       ]);
+      const totalRowIdx = rows.length - 1;
 
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.aoa_to_sheet(rows);
 
       ws['!cols'] = [
-        { wch: 18 },
-        { wch: 15 },
-        { wch: 35 },
-        { wch: 35 },
-        { wch: 25 },
-        { wch: 50 },
-        { wch: 18 },
-        { wch: 15 },
-        { wch: 18 },
-        { wch: 15 }
+        { wch: 18 }, { wch: 15 }, { wch: 35 }, { wch: 35 }, { wch: 25 },
+        { wch: 50 }, { wch: 18 }, { wch: 15 }, { wch: 18 }, { wch: 15 }
       ];
+
+      const NCOLS = 10;
+      styleTitle(ws, 0, NCOLS);
+      styleHeaderRow(ws, headerRowIdx, NCOLS);
+      styleDataRows(ws, firstDataRow, lastDataRow, NCOLS);
+      styleTotalRow(ws, totalRowIdx, NCOLS);
 
       const sheetName = exportAllData ? 'Tous les engagements' : 'Engagements page';
       XLSX.utils.book_append_sheet(wb, ws, sheetName);
@@ -1831,7 +1821,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
       // ---- Fonction pour dessiner les en-têtes de colonnes ----
       const drawColumnHeaders = (y: number): number => {
-        pdf.setFillColor(59, 130, 246);
+        pdf.setFillColor(79, 70, 229);
         pdf.rect(margin, y, pageWidth - (margin * 2), 10, 'F');
         pdf.setTextColor(255, 255, 255);
         pdf.setFontSize(7);
@@ -1935,6 +1925,9 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
       // ---- Ajout des totaux en bas ----
       const totalAmount = dataToExport.reduce((sum, eng) => sum + eng.amount, 0);
+      // Disponible cohérent : sous-lignes DISTINCTES (évite de compter une sous-ligne plusieurs fois)
+      const distinctSubLineIdsPdf = Array.from(new Set(dataToExport.map(e => e.subBudgetLineId)));
+      const totalAvailablePdf = distinctSubLineIdsPdf.reduce((s, id) => s + getAvailableAmountForSubLine(id), 0);
       const totalRowHeight = 10;
       if (yPosition + totalRowHeight > pageHeight - margin) {
         pdf.addPage();
@@ -1949,15 +1942,17 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       pdf.setFont('helvetica', 'bold');
       pdf.setFontSize(7);
 
-      // Position pour le libellé "TOTAL"
+      // Libellé "TOTAL" sous la colonne Description (index 5), puis les totaux alignés
+      // sous leurs colonnes respectives : Montant (index 6) et Disponible (index 7).
       let xTotal = margin;
-      // On additionne les largeurs des colonnes avant "Montant" (index 6)
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < 5; i++) {
         xTotal += colDefs[i].width;
       }
       pdf.text('TOTAL', xTotal + 1, yPosition + 6);
-      xTotal += colDefs[6].width; // colonne Montant
+      xTotal += colDefs[5].width; // → début colonne Montant
       pdf.text(`${formatAmountShort(totalAmount)} ${currencySymbol}`, xTotal + 1, yPosition + 6);
+      xTotal += colDefs[6].width; // → début colonne Disponible
+      pdf.text(`${formatAmountShort(totalAvailablePdf)} ${currencySymbol}`, xTotal + 1, yPosition + 6);
 
       // ---- Numéros de pages ----
       const pageCount = pdf.getNumberOfPages();
@@ -2368,27 +2363,15 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              N° Facture *
-              {formData.invoiceNumber && invoiceNumberExists && (
-                <span className="ml-2 text-xs text-red-600 font-medium">
-                  ⚠️ Déjà utilisé
-                </span>
-              )}
+              N° Facture <span className="text-xs font-normal text-gray-400">(optionnel)</span>
             </label>
             <input
               type="text"
               value={formData.invoiceNumber}
               onChange={(e) => setFormData(prev => ({ ...prev, invoiceNumber: e.target.value }))}
-              className={`w-full px-3 py-2 border ${invoiceNumberExists ? 'border-red-500' : 'border-gray-300'} rounded-lg focus:ring-2 ${invoiceNumberExists ? 'focus:ring-red-500' : 'focus:ring-blue-500'} focus:border-transparent`}
-              placeholder="Ex: FAC-2024-001 (obligatoire)"
-              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="Ex: FAC-2024-001"
             />
-            {formData.invoiceNumber && !invoiceNumberExists && (
-              <p className="text-xs text-green-600 mt-1">✅ Numéro de facture unique</p>
-            )}
-            {!formData.invoiceNumber && (
-              <p className="text-xs text-gray-400 mt-1">⚠️ Le numéro de facture est obligatoire</p>
-            )}
           </div>
         </div>
 
@@ -2422,6 +2405,17 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
               ℹ️ En tant que comptable, vous pouvez modifier cet engagement même s'il est {editingEngagement.status === 'approved' ? 'approuvé' : 'rejeté'}.
             </p>
           )}
+        </div>
+
+        {/* Fiche d'engagement physique / justificatifs */}
+        <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+          <FileUploader
+            value={attachments}
+            onChange={setAttachments}
+            folder="engagements"
+            label="Fiche d'engagement physique / justificatifs (optionnel)"
+            canRemove={editingEngagement ? (canDelete && editingEngagement.status === 'pending') : true}
+          />
         </div>
       </>
     );
@@ -2702,8 +2696,15 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
               </p>
             </div>
             <div className="text-center">
-              <p className="text-xs text-gray-600">En Attente</p>
-              <p className="text-lg font-bold text-yellow-600">{engagements.filter(eng => eng.status === 'pending').length}</p>
+              <p className="text-xs text-gray-600">Montant En Attente</p>
+              <p className="text-lg font-bold text-yellow-600">
+                {formatCurrency(
+                  engagements
+                    .filter(eng => eng.status === 'pending')
+                    .reduce((sum, eng) => sum + eng.amount, 0),
+                  selectedGrant.currency
+                )}
+              </p>
             </div>
           </div>
         </div>
@@ -3109,18 +3110,12 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                     isSubmitting ||
                     (!isComptable && editingEngagement && editingEngagement.status !== 'pending') ||
                     exceedsAvailableAmount ||
-                    invoiceNumberExists ||
-                    !formData.invoiceNumber ||
-                    !formData.invoiceNumber.trim() ||
                     !formData.supplier
                   }
                   className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
                     isSubmitting ||
                     (!isComptable && editingEngagement && editingEngagement.status !== 'pending') ||
                     exceedsAvailableAmount ||
-                    invoiceNumberExists ||
-                    !formData.invoiceNumber ||
-                    !formData.invoiceNumber.trim() ||
                     !formData.supplier
                       ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                       : 'bg-blue-600 text-white hover:bg-blue-700'
@@ -3734,6 +3729,23 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+
+              {/* Fichiers joints (justificatifs / fiche d'engagement physique) */}
+              {viewingEngagement.attachments && viewingEngagement.attachments.length > 0 && (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Fichiers joints</h3>
+                  <AttachmentList
+                    attachments={viewingEngagement.attachments}
+                    title="Justificatifs / fiche d'engagement"
+                    onDelete={(canDelete && viewingEngagement.status === 'pending') ? async (att) => {
+                      const updated = (viewingEngagement.attachments || []).filter(a => a.id !== att.id);
+                      onUpdateEngagement(viewingEngagement.id, { attachments: updated });
+                      setViewingEngagement({ ...viewingEngagement, attachments: updated });
+                      await deleteAttachment(att.path);
+                    } : undefined}
+                  />
                 </div>
               )}
             </div>

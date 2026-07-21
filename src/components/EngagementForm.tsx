@@ -3,7 +3,9 @@ import { X, Save, FileText, User, CheckCircle, AlertTriangle, Download } from 'l
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { showValidationError } from '../utils/alerts';
-import { BudgetLine, SubBudgetLine, Grant, Engagement } from '../types';
+import { BudgetLine, SubBudgetLine, Grant, Engagement, Attachment } from '../types';
+import { FileUploader } from './AttachmentUploader';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface EngagementFormProps {
   subBudgetLine: SubBudgetLine;
@@ -25,6 +27,13 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
   const [currentUserName, setCurrentUserName] = useState('');
   const printRef = useRef<HTMLDivElement>(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const { hasPermission } = usePermissions();
+  const canDeleteEngagement = hasPermission('engagements', 'delete');
+
+  // Formatage monétaire selon la devise de la subvention active (et non l'euro par défaut)
+  const fmtMoney = (n: number) =>
+    (Number(n) || 0).toLocaleString('fr-FR', { style: 'currency', currency: grant.currency });
+  const currencySymbol = grant.currency === 'USD' ? '$' : grant.currency === 'XOF' ? 'FCFA' : '€';
 
   // 🎯 Télécharger la fiche d'engagement en PDF (capture fidèle du formulaire)
   const handleDownloadPDF = async () => {
@@ -92,6 +101,8 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
     finalApproval: { name: '', signature: false }
   });
 
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+
   useEffect(() => {
     if (editingEngagement) {
       setFormData({
@@ -102,7 +113,8 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
         quoteReference: editingEngagement.quoteReference || '',
         date: editingEngagement.date
       });
-      
+      setAttachments(editingEngagement.attachments || []);
+
       if (editingEngagement.approvals) {
         setApprovals({
           supervisor1: editingEngagement.approvals.supervisor1 || { name: '', signature: false },
@@ -150,7 +162,8 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
       subBudgetLineId: subBudgetLine.id,
       amount: parseFloat(formData.amount),
       description: formData.description,
-      date: formData.date,
+      // Ne pas écraser la date existante si le champ est laissé vide en modification
+      date: formData.date || editingEngagement?.date || '',
       supplier: formData.supplier,
       quoteReference: formData.quoteReference,
       // ✅ Préserver le statut existant en modification ; "pending" seulement à la création
@@ -171,7 +184,8 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
           date: new Date().toISOString().split('T')[0],
           signature: approvals.finalApproval.signature
         } : undefined
-      }
+      },
+      attachments
     };
 
     onSave(engagement);
@@ -244,13 +258,13 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
             <div>
               <p className="text-sm text-blue-700 font-medium">Budget Notifié</p>
               <p className="text-blue-900 font-semibold">
-                {subBudgetLine.notifiedAmount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                {fmtMoney(subBudgetLine.notifiedAmount)}
               </p>
             </div>
             <div>
               <p className="text-sm text-blue-700 font-medium">Solde Disponible</p>
               <p className={`font-semibold ${soldeDisponible >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {soldeDisponible.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                {fmtMoney(soldeDisponible)}
               </p>
               <p className="text-sm text-blue-700 font-medium">Taux d'Engagement</p>
               <p className={`font-semibold ${getTauxColor(tauxEngagementActuel)}`}>
@@ -282,15 +296,16 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Date *
+                  Date {!editingEngagement && '*'}
                 </label>
                 <input
                   type="date"
                   value={formData.date}
                   onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  required
+                  required={!editingEngagement}
                 />
+                {editingEngagement && <p className="text-xs text-gray-400 mt-1">Laissez vide pour conserver la date actuelle.</p>}
               </div>
             </div>
 
@@ -342,8 +357,8 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
                   placeholder="0.00"
                   required
                 />
-                <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">
-                  €
+                <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 text-sm">
+                  {currencySymbol}
                 </div>
               </div>
             </div>
@@ -371,13 +386,13 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
                 <div>
                   <p className="text-sm text-green-700 font-medium">Montant de l'Engagement</p>
                   <p className="text-lg font-bold text-purple-600">
-                    {montantEngagement.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                    {fmtMoney(montantEngagement)}
                   </p>
                 </div>
                 <div>
                   <p className="text-sm text-green-700 font-medium">Solde de la Sous-ligne</p>
                   <p className={`font-semibold ${nouveauSolde >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {nouveauSolde.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                    {fmtMoney(nouveauSolde)}
                   </p>
                   {nouveauSolde < 0 && (
                     <div className="flex items-center space-x-1 text-red-600 text-xs mt-1">
@@ -510,6 +525,17 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
               </div>
             </div>
           )}
+
+          {/* Documents physiques (proformas, etc.) */}
+          <div className="bg-gray-50 rounded-xl p-6" data-html2canvas-ignore="true">
+            <FileUploader
+              value={attachments}
+              onChange={setAttachments}
+              folder="engagements"
+              label="Fiche d'engagement physique / justificatifs (optionnel)"
+              canRemove={editingEngagement ? (canDeleteEngagement && editingEngagement.status === 'pending') : true}
+            />
+          </div>
 
           {/* Actions */}
           <div className="flex space-x-4 pt-6" data-html2canvas-ignore="true">

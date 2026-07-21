@@ -35,17 +35,17 @@ export class PermissionService {
   // Liste des modules disponibles (définition statique)
   static getAvailableModules() {
     return [
-      { 
-        module: 'dashboard', 
-        label: 'Tableau de Bord', 
+      {
+        module: 'dashboard',
+        label: 'Tableau de Bord',
         actions: ['view'],
         description: 'Accès au tableau de bord principal'
       },
-      { 
-        module: 'grants', 
-        label: 'Subventions', 
-        actions: ['view', 'create', 'edit', 'delete'],
-        description: 'Gestion des subventions'
+      {
+        module: 'grants',
+        label: 'Subventions',
+        actions: ['view', 'create', 'edit', 'delete', 'export'],
+        description: 'Gestion des subventions (export PDF des fiches)'
       },
       { 
         module: 'budget_planning', 
@@ -59,17 +59,17 @@ export class PermissionService {
         actions: ['view', 'create', 'edit', 'delete', 'export'],
         description: 'Planification et suivi budgétaire'
       },
-      { 
-        module: 'engagements', 
-        label: 'Engagements', 
-        actions: ['view', 'create', 'edit', 'delete', 'sign'],
-        description: 'Gestion des engagements'
+      {
+        module: 'engagements',
+        label: 'Engagements',
+        actions: ['view', 'create', 'edit', 'delete', 'sign', 'export'],
+        description: 'Gestion des engagements (export PDF/Excel)'
       },
-      { 
-        module: 'payments', 
-        label: 'Paiements', 
-        actions: ['view', 'create', 'edit', 'delete', 'sign'],
-        description: 'Gestion des paiements'
+      {
+        module: 'payments',
+        label: 'Paiements',
+        actions: ['view', 'create', 'edit', 'delete', 'sign', 'export'],
+        description: 'Gestion des paiements (export PDF/Excel)'
       },
       { 
         module: 'treasury', 
@@ -77,23 +77,29 @@ export class PermissionService {
         actions: ['view', 'create', 'edit', 'delete', 'export'],
         description: 'Gestion de la trésorerie'
       },
-      { 
-        module: 'prefinancing', 
-        label: 'Préfinancements', 
-        actions: ['view', 'create', 'edit', 'delete', 'sign'],
+      {
+        module: 'prefinancing',
+        label: 'Préfinancements',
+        actions: ['view', 'create', 'edit', 'delete', 'sign', 'export'],
         description: 'Gestion des préfinancements'
       },
-      { 
-        module: 'employee_loans', 
-        label: 'Prêts Employés', 
-        actions: ['view', 'create', 'edit', 'delete', 'sign'],
+      {
+        module: 'employee_loans',
+        label: 'Prêts Employés',
+        actions: ['view', 'create', 'edit', 'delete', 'sign', 'export'],
         description: 'Gestion des prêts employés'
       },
-      { 
-        module: 'reports', 
-        label: 'Rapports', 
+      {
+        module: 'reports',
+        label: 'Rapports',
         actions: ['view', 'create', 'export'],
         description: 'Génération de rapports'
+      },
+      {
+        module: 'history',
+        label: 'Historique',
+        actions: ['view', 'export'],
+        description: "Consultation de l'historique (modifications, notifications, transferts) et export"
       },
       { 
         module: 'users', 

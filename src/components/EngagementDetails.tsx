@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, FileText, CheckCircle, Clock, AlertCircle, User } from 'lucide-react';
 import { BudgetLine, SubBudgetLine, Engagement, ENGAGEMENT_STATUS } from '../types';
+import { AttachmentList } from './AttachmentUploader';
 
 interface EngagementDetailsProps {
   subBudgetLine: SubBudgetLine;
@@ -190,6 +191,13 @@ const EngagementDetails: React.FC<EngagementDetailsProps> = ({
                           <div className="mb-4">
                             <p className="text-sm text-gray-600">Référence devis</p>
                             <p className="font-medium text-gray-900">{engagement.quoteReference}</p>
+                          </div>
+                        )}
+
+                        {/* Documents physiques associés */}
+                        {engagement.attachments && engagement.attachments.length > 0 && (
+                          <div className="mb-4">
+                            <AttachmentList attachments={engagement.attachments} title="Proformas / documents associés" />
                           </div>
                         )}
 

@@ -1,11 +1,15 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Plus, Edit, Trash2, Banknote, Calendar, Building, ChevronLeft, ChevronRight, 
   Search, Filter, X, DollarSign, Clock, TrendingUp, AlertCircle, CheckCircle,
   CreditCard, Wallet, Eye, PieChart
 } from 'lucide-react';
+import { Download, CheckSquare, Square } from 'lucide-react';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 import { showSuccess, showError, showValidationError, confirmDelete } from '../utils/alerts';
-import { Grant, BudgetLine, SubBudgetLine, Payment, Prefinancing, EmployeeLoan, GRANT_STATUS } from '../types';
+import { Grant, BudgetLine, SubBudgetLine, Payment, Prefinancing, EmployeeLoan, GRANT_STATUS, NotificationTranche } from '../types';
+import NotificationTrancheModal from './NotificationTrancheModal';
 import { usePermissions } from '../hooks/usePermissions';
 
 interface GrantManagerProps {
@@ -20,6 +24,8 @@ interface GrantManagerProps {
   onDeleteGrant: (id: string) => void;
   onUpdateBudgetLine: (id: string, updates: Partial<BudgetLine>) => void;
   onUpdateSubBudgetLine: (id: string, updates: Partial<SubBudgetLine>) => void;
+  onNavigate?: (tab: string) => void;
+  onAddNotificationTranche?: (tranche: Omit<NotificationTranche, 'id' | 'createdAt'>) => void;
 }
 
 const GrantManager: React.FC<GrantManagerProps> = ({
@@ -32,8 +38,8 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   onAddGrant,
   onUpdateGrant,
   onDeleteGrant,
-  onUpdateBudgetLine,
-  onUpdateSubBudgetLine
+  onNavigate,
+  onAddNotificationTranche
 }) => {
   // États principaux
   const [showForm, setShowForm] = useState(false);
@@ -49,6 +55,26 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   const [showFilters, setShowFilters] = useState(false);
   const [selectedGrantId, setSelectedGrantId] = useState<string | null>(null);
   const [showGrantDetails, setShowGrantDetails] = useState(false);
+  const [selectedForExport, setSelectedForExport] = useState<Set<string>>(new Set());
+  const [isExporting, setIsExporting] = useState(false);
+  // Subvention pour laquelle on ouvre la modale « Nouvelle notification »
+  const [trancheGrant, setTrancheGrant] = useState<Grant | null>(null);
+
+  // Sous-lignes budgétaires appartenant à une subvention (via ses lignes budgétaires)
+  const getSubLinesForGrant = (grantId: string): SubBudgetLine[] => {
+    const lineIds = new Set(budgetLines.filter(l => l.grantId === grantId).map(l => l.id));
+    return subBudgetLines.filter(sl => lineIds.has(sl.budgetLineId));
+  };
+  const exportContainerRef = useRef<HTMLDivElement>(null);
+  const ficheRef = useRef<HTMLDivElement>(null);
+
+  const toggleExportSelection = (id: string) => {
+    setSelectedForExport(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
 
   const [formData, setFormData] = useState({
     name: '',
@@ -116,12 +142,22 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   };
 
   /**
+   * Montant engagé d'une subvention — dérivé des SOUS-LIGNES (source de vérité,
+   * cohérent avec le Tableau de bord et le Suivi budgétaire). Les lignes budgétaires
+   * parentes ne portent pas d'`engagedAmount` recalculé, d'où l'ancien affichage à 0.
+   */
+  const getEngagedForGrant = (grantId: string): number => {
+    const lineIds = new Set(budgetLines.filter(l => l.grantId === grantId).map(l => l.id));
+    return subBudgetLines
+      .filter(sl => lineIds.has(sl.budgetLineId))
+      .reduce((sum, sl) => sum + (Number(sl.engagedAmount) || 0), 0);
+  };
+
+  /**
    * Calcule le montant restant à payer pour une subvention
    */
   const getRemainingToPayForGrant = (grantId: string): number => {
-    const grantEngagements = budgetLines
-      .filter(line => line.grantId === grantId)
-      .reduce((sum, line) => sum + line.engagedAmount, 0);
+    const grantEngagements = getEngagedForGrant(grantId);
     const totalPaid = getTotalPaidForGrant(grantId);
     return Math.max(0, grantEngagements - totalPaid);
   };
@@ -142,10 +178,8 @@ const GrantManager: React.FC<GrantManagerProps> = ({
    * Calcule la progression globale des paiements pour une subvention
    */
   const getPaymentProgressForGrant = (grantId: string): number => {
-    const grantEngagements = budgetLines
-      .filter(line => line.grantId === grantId)
-      .reduce((sum, line) => sum + line.engagedAmount, 0);
-    
+    const grantEngagements = getEngagedForGrant(grantId);
+
     if (grantEngagements === 0) return 0;
     
     const totalPaid = getTotalPaidForGrant(grantId);
@@ -156,8 +190,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
    * Obtient les statistiques complètes de paiement pour une subvention
    */
   const getPaymentStatsForGrant = (grantId: string) => {
-    const grantBudgetLines = budgetLines.filter(line => line.grantId === grantId);
-    const totalEngaged = grantBudgetLines.reduce((sum, line) => sum + line.engagedAmount, 0);
+    const totalEngaged = getEngagedForGrant(grantId);
     const totalPaid = getTotalPaidForGrant(grantId);
     const inProgress = getInProgressAmountForGrant(grantId);
     const remainingToPay = getRemainingToPayForGrant(grantId);
@@ -199,9 +232,16 @@ const GrantManager: React.FC<GrantManagerProps> = ({
     }, 0);
   };
 
+  // Montant total des paiements rejetés d'une subvention
+  const getRejectedPaymentsForGrant = (grantId: string): number => {
+    return payments
+      .filter(p => p.grantId === grantId && p.status === 'rejected')
+      .reduce((sum, p) => sum + p.amount, 0);
+  };
+
   const getTotalEngagedNotDisbursed = (grantId: string) => {
-    const engagedPayments = payments.filter(p => 
-      p.grantId === grantId && 
+    const engagedPayments = payments.filter(p =>
+      p.grantId === grantId &&
       (p.status === 'pending' || p.status === 'in_progress')
     );
     
@@ -332,12 +372,11 @@ const GrantManager: React.FC<GrantManagerProps> = ({
       return;
     }
     
-    if (!formData.name || !formData.reference || !formData.grantingOrganization || !formData.totalAmount) {
+    if (!formData.name || !formData.reference || !formData.grantingOrganization) {
       showValidationError('Champs obligatoires manquants', 'Veuillez remplir tous les champs obligatoires');
       return;
     }
 
-    const notifiedAmount = parseFloat(formData.totalAmount);
     const initialBalance = parseFloat(formData.initialBalance) || 0;
 
     const bankAccount = (formData.bankAccountName || formData.accountNumber || formData.bankName) ? {
@@ -350,55 +389,12 @@ const GrantManager: React.FC<GrantManagerProps> = ({
 
     if (editingGrant) {
       const grantBudgetLines = budgetLines.filter(line => line.grantId === editingGrant.id);
-      const currentNotifiedAmount = editingGrant.totalAmount;
-      const newNotifiedAmount = notifiedAmount;
-      
-      if (currentNotifiedAmount !== newNotifiedAmount && grantBudgetLines.length > 0) {
-        const totalPlannedAmount = grantBudgetLines.reduce((sum, line) => sum + line.plannedAmount, 0);
-        
-        if (totalPlannedAmount > 0) {
-          grantBudgetLines.forEach(line => {
-            const proportion = line.plannedAmount / totalPlannedAmount;
-            const newLineNotifiedAmount = newNotifiedAmount * proportion;
-            const newAvailableAmount = newLineNotifiedAmount - line.engagedAmount;
-            
-            onUpdateBudgetLine(line.id, {
-              notifiedAmount: newLineNotifiedAmount,
-              availableAmount: newAvailableAmount
-            });
-            
-            const lineSubBudgetLines = subBudgetLines.filter(subLine => subLine.budgetLineId === line.id);
-            if (lineSubBudgetLines.length > 0) {
-              const totalSubLinePlanned = lineSubBudgetLines.reduce((sum, subLine) => sum + subLine.plannedAmount, 0);
-              
-              if (totalSubLinePlanned > 0) {
-                lineSubBudgetLines.forEach(subLine => {
-                  const subProportion = subLine.plannedAmount / totalSubLinePlanned;
-                  const newSubLineNotifiedAmount = newLineNotifiedAmount * subProportion;
-                  const newSubLineAvailableAmount = newSubLineNotifiedAmount - subLine.engagedAmount;
-                  
-                  onUpdateSubBudgetLine(subLine.id, {
-                    notifiedAmount: newSubLineNotifiedAmount,
-                    availableAmount: newSubLineAvailableAmount
-                  });
-                });
-              }
-            }
-          });
-        } else {
-          const amountPerLine = newNotifiedAmount / grantBudgetLines.length;
-          grantBudgetLines.forEach(line => {
-            const newAvailableAmount = amountPerLine - line.engagedAmount;
-            onUpdateBudgetLine(line.id, {
-              notifiedAmount: amountPerLine,
-              availableAmount: newAvailableAmount
-            });
-          });
-        }
-      }
-
       const plannedAmount = grantBudgetLines.reduce((sum, line) => sum + line.plannedAmount, 0);
 
+      // ⚠️ Le budget notifié n'est PAS modifiable ici : il est alimenté exclusivement par
+      // les tranches de notification (bouton « Notifier un montant »). On ne renvoie donc
+      // pas `totalAmount` et on ne redistribue rien : les montants notifiés des lignes et
+      // sous-lignes — et tous les calculs en cours — restent intacts.
       onUpdateGrant(editingGrant.id, {
         name: formData.name,
         reference: formData.reference,
@@ -406,9 +402,9 @@ const GrantManager: React.FC<GrantManagerProps> = ({
         year: formData.year,
         currency: formData.currency,
         plannedAmount: plannedAmount,
-        totalAmount: notifiedAmount,
-        startDate: formData.startDate,
-        endDate: formData.endDate,
+        // Ne pas écraser les dates existantes si le champ est laissé vide en modification
+        startDate: formData.startDate || editingGrant.startDate,
+        endDate: formData.endDate || editingGrant.endDate,
         status: formData.status,
         description: formData.description,
         bankAccount: bankAccount
@@ -423,14 +419,17 @@ const GrantManager: React.FC<GrantManagerProps> = ({
         year: formData.year,
         currency: formData.currency,
         plannedAmount: 0,
-        totalAmount: notifiedAmount,
+        // Le budget notifié démarre à 0 : il s'alimente via les notifications (tranches)
+        totalAmount: 0,
         startDate: formData.startDate,
         endDate: formData.endDate,
-        status: formData.status,
+        // À la création, la subvention est toujours « en attente » : elle sera activée
+        // automatiquement à l'ajout du premier montant notifié.
+        status: 'pending',
         description: formData.description,
         bankAccount: bankAccount
       });
-      showSuccess('Subvention créée', 'La subvention a été créée avec succès');
+      showSuccess('Subvention créée', 'La subvention a été créée « en attente ». Elle sera activée automatiquement dès l\'ajout du premier montant notifié via « Notifier un montant ».');
     }
 
     resetForm();
@@ -517,6 +516,17 @@ const GrantManager: React.FC<GrantManagerProps> = ({
     }
   };
 
+  // Accent coloré (bordure gauche) pour distinguer visuellement chaque subvention selon son statut
+  const getStatusAccent = (status: Grant['status']) => {
+    switch (status) {
+      case 'active': return 'border-l-green-500';
+      case 'pending': return 'border-l-yellow-500';
+      case 'completed': return 'border-l-blue-500';
+      case 'suspended': return 'border-l-red-500';
+      default: return 'border-l-gray-400';
+    }
+  };
+
   const getStatusLabel = (status: Grant['status']) => {
     switch (status) {
       case 'active': return 'Active';
@@ -538,6 +548,8 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   const canEdit = hasPermission('grants', 'edit');
   const canDelete = hasPermission('grants', 'delete');
   const canView = hasPermission('grants', 'view');
+  // Peut exporter : uniquement si la permission d'export est accordée pour ce module
+  const canExport = hasPermission('grants', 'export');
 
   if (permissionsLoading) {
     return (
@@ -567,6 +579,287 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   const currentSortedGrants = sortedFilteredGrants.slice(startIndex, endIndex);
 
   // ============================================
+  // EXPORT PDF (capture visuelle fidèle) DES SUBVENTIONS
+  // ============================================
+
+  // Carte visuelle d'une subvention, identique à l'affichage — rendue hors-écran pour la capture
+  const GrantExportCard = ({ grant }: { grant: Grant }) => {
+    const stats = getPaymentStatsForGrant(grant.id);
+    const disbursed = getTotalDisbursed(grant.id);
+    const notified = grant.totalAmount || 0;
+    const engaged = stats.totalEngaged;
+    const nonEngaged = Math.max(0, notified - engaged);
+    const engRate = notified > 0 ? (engaged / notified) * 100 : 0;
+    const disbRate = notified > 0 ? (disbursed / notified) * 100 : 0;
+    const active = getActivePartialPaymentsForGrant(grant.id);
+    const rejected = getRejectedPaymentsForGrant(grant.id);
+    const days = grant.endDate ? getDaysRemaining(grant.endDate) : null;
+
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="flex items-center gap-2 mb-2">
+          <h4 className="text-lg font-semibold text-gray-900">{grant.name}</h4>
+          <span className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusColor(grant.status)}`}>{getStatusLabel(grant.status)}</span>
+          {active > 0 && (
+            <span className="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-purple-100 text-purple-800">
+              <DollarSign className="w-3 h-3 mr-1" />{active} échelonné(s)
+            </span>
+          )}
+        </div>
+        <div className="flex items-center flex-wrap gap-x-4 gap-y-1 text-sm text-gray-600 mb-3">
+          <span className="flex items-center gap-1"><Building className="w-4 h-4" />{grant.grantingOrganization}</span>
+          <span>•</span><span>Réf: {grant.reference}</span>
+          <span>•</span><span>{grant.year}</span>
+          {days !== null && (<><span>•</span><span className="flex items-center gap-1 text-green-600"><Calendar className="w-4 h-4" />{days > 0 ? `${days} jours restants` : days === 0 ? "Expire aujourd'hui" : 'Expiré'}</span></>)}
+        </div>
+        {grant.description && <p className="text-sm text-gray-500 mb-4">{grant.description}</p>}
+        <div className="grid grid-cols-5 gap-3 mb-4">
+          <div className="bg-blue-50 rounded-lg p-3">
+            <p className="text-xs text-blue-600 font-medium mb-1">Notifié</p>
+            <p className="text-base font-semibold text-blue-900">{formatCurrency(notified, grant.currency)}</p>
+            <p className="text-[10px] text-blue-500 mt-1">Budget alloué total</p>
+          </div>
+          <div className="bg-orange-50 rounded-lg p-3">
+            <p className="text-xs text-orange-600 font-medium mb-1">Engagé</p>
+            <p className="text-base font-semibold text-orange-900">{formatCurrency(engaged, grant.currency)}</p>
+            <p className="text-[10px] text-orange-500 mt-1">{engRate.toFixed(2)}% du notifié</p>
+          </div>
+          <div className="bg-green-50 rounded-lg p-3">
+            <p className="text-xs text-green-600 font-medium mb-1">Décaissé</p>
+            <p className="text-base font-semibold text-green-900">{formatCurrency(disbursed, grant.currency)}</p>
+            <p className="text-[10px] text-green-500 mt-1">{disbRate.toFixed(2)}% du notifié</p>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3">
+            <p className="text-xs text-gray-600 font-medium mb-1">Non engagé</p>
+            <p className="text-base font-semibold text-gray-900">{formatCurrency(nonEngaged, grant.currency)}</p>
+            <p className="text-[10px] text-gray-500 mt-1">Reste à engager</p>
+          </div>
+          <div className="bg-red-50 rounded-lg p-3">
+            <p className="text-xs text-red-600 font-medium mb-1">Paiements rejetés</p>
+            <p className="text-base font-semibold text-red-900">{formatCurrency(rejected, grant.currency)}</p>
+            <p className="text-[10px] text-red-500 mt-1">Paiements refusés</p>
+          </div>
+        </div>
+        <div className="space-y-2 mb-3">
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-sm font-medium text-gray-700">Taux d'engagement</span>
+              <span className="text-sm text-gray-600">{engRate.toFixed(2)}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div className="h-2 rounded-full bg-green-500" style={{ width: `${Math.min(engRate, 100)}%` }} />
+            </div>
+          </div>
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-sm font-medium text-gray-700">Taux de décaissement</span>
+              <span className="text-sm text-gray-600">{disbRate.toFixed(2)}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div className="h-2 rounded-full bg-blue-500" style={{ width: `${Math.min(disbRate, 100)}%` }} />
+            </div>
+          </div>
+        </div>
+        {grant.bankAccount && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-center justify-between">
+            <span className="flex items-center gap-2 text-green-900 font-medium">
+              <Wallet className="w-4 h-4 text-green-600" />
+              {grant.bankAccount.name} <span className="text-green-600 font-normal">{grant.bankAccount.bankName}</span>
+            </span>
+            <span className="text-green-900">Solde <span className="font-bold text-green-600">{formatCurrency(grant.bankAccount.balance, grant.currency)}</span></span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ============================================
+  // EXPORTS PDF (structurés : titre + cartes 3x2 en 1re page)
+  // ============================================
+  const pdfAmount = (n: number) => (Number(n) || 0).toLocaleString('fr-FR').replace(/ | /g, ' ');
+  const getPlannedForGrant = (grantId: string) =>
+    budgetLines.filter(l => l.grantId === grantId).reduce((s, l) => s + (l.plannedAmount || 0), 0);
+
+  const grantMetrics = (grant: Grant) => {
+    const planned = getPlannedForGrant(grant.id);
+    const notified = grant.totalAmount || 0;
+    const engaged = getPaymentStatsForGrant(grant.id).totalEngaged;
+    const disbursed = getTotalDisbursed(grant.id);
+    const nonEngaged = Math.max(0, notified - engaged);
+    const disbRate = notified > 0 ? (disbursed / notified) * 100 : 0;
+    return { planned, notified, engaged, disbursed, nonEngaged, disbRate };
+  };
+
+  // Dessine 6 cartes récapitulatives : 3 par ligne, 2 lignes. Retourne le Y suivant.
+  const drawSummaryCards = (pdf: jsPDF, cards: { label: string; value: string }[], startY: number) => {
+    const pageW = pdf.internal.pageSize.getWidth();
+    const margin = 12;
+    const gap = 4;
+    const cols = 3;
+    const cardW = (pageW - margin * 2 - gap * (cols - 1)) / cols;
+    const cardH = 20;
+    cards.slice(0, 6).forEach((c, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = margin + col * (cardW + gap);
+      const y = startY + row * (cardH + gap);
+      pdf.setFillColor(238, 242, 255);
+      pdf.setDrawColor(199, 210, 254);
+      pdf.roundedRect(x, y, cardW, cardH, 2, 2, 'FD');
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(99, 102, 241);
+      pdf.text(c.label, x + 4, y + 7);
+      pdf.setFontSize(11); pdf.setTextColor(30, 27, 75);
+      pdf.text(c.value, x + 4, y + 15);
+    });
+    return startY + 2 * (cardH + gap);
+  };
+
+  // Export de la LISTE des subventions cochées
+  const exportGrantsPDF = (list: Grant[], filename: string) => {
+    if (!list.length) {
+      showValidationError('Aucune subvention', 'Cochez au moins une subvention à exporter.');
+      return;
+    }
+    try {
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const margin = 12;
+
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(16); pdf.setTextColor(79, 70, 229);
+      pdf.text('Liste des subventions', pageW / 2, 16, { align: 'center' });
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(100, 100, 100);
+      pdf.text(`Généré le ${new Date().toLocaleDateString('fr-FR')} — ${list.length} subvention(s)`, pageW / 2, 22, { align: 'center' });
+
+      // Cartes récapitulatives (agrégat) — uniquement sur la première page
+      const agg = list.reduce((a, g) => {
+        const m = grantMetrics(g);
+        return { planned: a.planned + m.planned, notified: a.notified + m.notified, engaged: a.engaged + m.engaged, disbursed: a.disbursed + m.disbursed };
+      }, { planned: 0, notified: 0, engaged: 0, disbursed: 0 });
+      const aggNonEngaged = Math.max(0, agg.notified - agg.engaged);
+      const aggRate = agg.notified > 0 ? (agg.disbursed / agg.notified) * 100 : 0;
+      let y = drawSummaryCards(pdf, [
+        { label: 'Montant planifié', value: pdfAmount(agg.planned) },
+        { label: 'Budget notifié', value: pdfAmount(agg.notified) },
+        { label: 'Montant engagé', value: pdfAmount(agg.engaged) },
+        { label: 'Montant décaissé', value: pdfAmount(agg.disbursed) },
+        { label: 'Montant non engagé', value: pdfAmount(aggNonEngaged) },
+        { label: 'Taux de décaissement', value: `${aggRate.toFixed(2)}%` },
+      ], 28) + 4;
+
+      // Tableau
+      const cols = [
+        { label: 'N°', w: 24, align: 'left' as const },
+        { label: 'Subvention', w: 48, align: 'left' as const },
+        { label: 'Notifié', w: 27, align: 'right' as const },
+        { label: 'Engagé', w: 27, align: 'right' as const },
+        { label: 'Décaissé', w: 28, align: 'right' as const },
+        { label: 'Statut', w: 32, align: 'left' as const },
+      ];
+      const drawHeader = (yy: number) => {
+        let x = margin;
+        pdf.setFillColor(79, 70, 229);
+        pdf.rect(margin, yy, pageW - margin * 2, 8, 'F');
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(255, 255, 255);
+        cols.forEach(c => {
+          const tw = pdf.getTextWidth(c.label);
+          const tx = c.align === 'right' ? x + c.w - tw - 2 : x + 2;
+          pdf.text(c.label, tx, yy + 5.5); x += c.w;
+        });
+        pdf.setTextColor(0, 0, 0); pdf.setFont('helvetica', 'normal');
+        return yy + 8;
+      };
+      y = drawHeader(y);
+
+      pdf.setFontSize(8);
+      list.forEach((g, ri) => {
+        if (y > pageH - 16) { pdf.addPage(); y = 16; y = drawHeader(y); }
+        if (ri % 2 === 1) { pdf.setFillColor(248, 250, 252); pdf.rect(margin, y, pageW - margin * 2, 7, 'F'); }
+        const m = grantMetrics(g);
+        const cells = [g.reference || '-', g.name, pdfAmount(m.notified), pdfAmount(m.engaged), pdfAmount(m.disbursed), getStatusLabel(g.status)];
+        let x = margin;
+        cells.forEach((cell, ci) => {
+          const c = cols[ci];
+          const text = pdf.splitTextToSize(String(cell), c.w - 3)[0] || '';
+          const tw = pdf.getTextWidth(text);
+          const tx = c.align === 'right' ? x + c.w - tw - 2 : x + 2;
+          pdf.text(text, tx, y + 5); x += c.w;
+        });
+        y += 7;
+      });
+
+      // Totaux
+      if (y > pageH - 16) { pdf.addPage(); y = 16; }
+      pdf.setFillColor(224, 231, 255); pdf.rect(margin, y, pageW - margin * 2, 8, 'F');
+      pdf.setFont('helvetica', 'bold'); pdf.setTextColor(79, 70, 229);
+      let tx = margin + 2;
+      pdf.text('TOTAUX', tx, y + 5.5);
+      tx = margin + cols[0].w + cols[1].w;
+      [agg.notified, agg.engaged, agg.disbursed].forEach((v, i) => {
+        const c = cols[2 + i];
+        const s = pdfAmount(v); const w = pdf.getTextWidth(s);
+        pdf.text(s, tx + c.w - w - 2, y + 5.5); tx += c.w;
+      });
+
+      pdf.save(filename);
+      showSuccess('Export réussi', `${list.length} subvention(s) exportée(s) en PDF.`);
+    } catch (e) {
+      console.error('Export subventions échoué:', e);
+      showError('Erreur', 'Impossible de générer le PDF.');
+    }
+  };
+
+  // Export du DÉTAIL d'une subvention
+  const exportGrantFiche = (grant: Grant) => {
+    try {
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pageW = pdf.internal.pageSize.getWidth();
+      const margin = 12;
+
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(15); pdf.setTextColor(79, 70, 229);
+      pdf.text(pdf.splitTextToSize(`Détails de la subvention : ${grant.name}`, pageW - margin * 2)[0], pageW / 2, 16, { align: 'center' });
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(100, 100, 100);
+      pdf.text(`Réf: ${grant.reference || '-'} — Généré le ${new Date().toLocaleDateString('fr-FR')}`, pageW / 2, 22, { align: 'center' });
+
+      const m = grantMetrics(grant);
+      let y = drawSummaryCards(pdf, [
+        { label: 'Montant planifié', value: pdfAmount(m.planned) },
+        { label: 'Budget notifié', value: pdfAmount(m.notified) },
+        { label: 'Montant engagé', value: pdfAmount(m.engaged) },
+        { label: 'Montant décaissé', value: pdfAmount(m.disbursed) },
+        { label: 'Montant non engagé', value: pdfAmount(m.nonEngaged) },
+        { label: 'Taux de décaissement', value: `${m.disbRate.toFixed(2)}%` },
+      ], 28) + 6;
+
+      const info: [string, string][] = [
+        ['Organisme', grant.grantingOrganization || '-'],
+        ['Année', String(grant.year || '-')],
+        ['Statut', getStatusLabel(grant.status)],
+        ['Devise', String(grant.currency)],
+        ['Période', `${grant.startDate ? new Date(grant.startDate).toLocaleDateString('fr-FR') : '?'} → ${grant.endDate ? new Date(grant.endDate).toLocaleDateString('fr-FR') : '?'}`],
+      ];
+      pdf.setFontSize(10);
+      info.forEach(([k, v]) => {
+        pdf.setFont('helvetica', 'bold'); pdf.setTextColor(60, 60, 60); pdf.text(`${k} :`, margin, y);
+        pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20, 20, 20); pdf.text(String(v), margin + 40, y);
+        y += 8;
+      });
+      if (grant.description) {
+        y += 2;
+        pdf.setFont('helvetica', 'bold'); pdf.setTextColor(60, 60, 60); pdf.text('Description :', margin, y); y += 6;
+        pdf.setFont('helvetica', 'normal'); pdf.setTextColor(20, 20, 20);
+        pdf.splitTextToSize(grant.description, pageW - margin * 2).forEach((ln: string) => { pdf.text(ln, margin, y); y += 6; });
+      }
+
+      pdf.save(`Details_subvention_${grant.reference || grant.name}.pdf`);
+      showSuccess('Export réussi', 'Fiche exportée en PDF.');
+    } catch (e) {
+      console.error('Export fiche échoué:', e);
+      showError('Erreur', 'Impossible de générer le PDF.');
+    }
+  };
+
+  // ============================================
   // COMPOSANT DETAILS GRANT
   // ============================================
 
@@ -586,21 +879,56 @@ const GrantManager: React.FC<GrantManagerProps> = ({
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+        <div ref={ficheRef} className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
           <div className="sticky top-0 bg-white z-10 p-6 border-b flex items-center justify-between">
             <div>
               <h3 className="text-xl font-bold text-gray-900">{grant.name}</h3>
               <p className="text-sm text-gray-600">{grant.reference}</p>
             </div>
-            <button
-              onClick={onClose}
-              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
-            >
-              <X className="w-6 h-6" />
-            </button>
+            <div className="flex items-center space-x-2" data-html2canvas-ignore="true">
+              <button
+                onClick={() => exportGrantFiche(grant)}
+                disabled={isExporting}
+                className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+                title="Exporter cette fiche en PDF"
+              >
+                <Download className="w-4 h-4" />
+                <span>{isExporting ? 'Génération...' : 'Exporter la fiche'}</span>
+              </button>
+              <button
+                onClick={onClose}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
           </div>
 
           <div className="p-6 space-y-6">
+            {/* Cartes récapitulatives — identiques à la page principale (3 par ligne, 2 lignes) */}
+            {(() => {
+              const m = grantMetrics(grant);
+              const tiles = [
+                { label: 'Montant planifié', value: m.planned, sub: 'Budget planifié total', bg: 'bg-indigo-50', tc: 'text-indigo-600', vc: 'text-indigo-900' },
+                { label: 'Notifié', value: m.notified, sub: 'Budget alloué total', bg: 'bg-blue-50', tc: 'text-blue-600', vc: 'text-blue-900' },
+                { label: 'Engagé', value: m.engaged, sub: `${utilizationRate.toFixed(2)}% du notifié`, bg: 'bg-orange-50', tc: 'text-orange-600', vc: 'text-orange-900' },
+                { label: 'Décaissé', value: m.disbursed, sub: `${disbursementRate.toFixed(2)}% du notifié`, bg: 'bg-green-50', tc: 'text-green-600', vc: 'text-green-900' },
+                { label: 'Non engagé', value: m.nonEngaged, sub: 'Reste à engager', bg: 'bg-gray-50', tc: 'text-gray-600', vc: 'text-gray-900' },
+                { label: 'Paiements rejetés', value: getRejectedPaymentsForGrant(grant.id), sub: 'Paiements refusés', bg: 'bg-red-50', tc: 'text-red-600', vc: 'text-red-900' },
+              ];
+              return (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3">
+                  {tiles.map(t => (
+                    <div key={t.label} className={`${t.bg} rounded-lg p-2 md:p-3`}>
+                      <p className={`text-xs ${t.tc} font-medium mb-1`}>{t.label}</p>
+                      <p className={`text-sm md:text-base font-semibold ${t.vc}`}>{formatCurrency(t.value, grant.currency)}</p>
+                      <p className={`text-[10px] ${t.tc} mt-1 opacity-80`}>{t.sub}</p>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
             {/* Informations générales */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div>
@@ -660,6 +988,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                 <div>
                   <p className="text-sm text-gray-600">Montant notifié</p>
                   <p className="font-bold text-blue-600">{formatCurrency(grant.totalAmount, grant.currency)}</p>
+                  <p className="text-xs text-gray-500">Budget alloué total</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Montant engagé</p>
@@ -672,67 +1001,12 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                   <p className="text-xs text-gray-500">{disbursementRate.toFixed(2)}% du notifié</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Reste à payer</p>
-                  <p className="font-bold text-red-600">{formatCurrency(paymentStats.remainingToPay, grant.currency)}</p>
+                  <p className="text-sm text-gray-600">Paiements rejetés</p>
+                  <p className="font-bold text-red-600">{formatCurrency(getRejectedPaymentsForGrant(grant.id), grant.currency)}</p>
+                  <p className="text-xs text-gray-500">Paiements refusés</p>
                 </div>
               </div>
             </div>
-
-            {/* Paiements échelonnés */}
-            {partialPayments.length > 0 && (
-              <div>
-                <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
-                  <DollarSign className="w-4 h-4 mr-2 text-purple-600" />
-                  Paiements échelonnés ({partialPayments.length})
-                </h4>
-                <div className="space-y-3">
-                  {partialPayments.map(payment => {
-                    const totalPaid = payment.partialPayments?.reduce((sum, pp) => sum + pp.amount, 0) || 0;
-                    const progress = payment.amount > 0 ? (totalPaid / payment.amount) * 100 : 0;
-                    const remaining = payment.amount - totalPaid;
-                    
-                    return (
-                      <div key={payment.id} className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                        <div className="flex justify-between items-center mb-2">
-                          <div>
-                            <p className="font-medium text-gray-900">{payment.paymentNumber}</p>
-                            <p className="text-sm text-gray-600">{payment.supplier}</p>
-                          </div>
-                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                            payment.status === 'paid' ? 'bg-green-100 text-green-800' :
-                            payment.status === 'in_progress' ? 'bg-purple-100 text-purple-800' :
-                            'bg-yellow-100 text-yellow-800'
-                          }`}>
-                            {payment.status === 'paid' ? 'Payé' :
-                             payment.status === 'in_progress' ? 'En cours' : 'En attente'}
-                          </span>
-                        </div>
-                        
-                        <div className="space-y-2">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-gray-600">Progression</span>
-                            <span className="font-medium text-purple-600">{progress.toFixed(0)}%</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2">
-                            <div 
-                              className="h-2 rounded-full bg-purple-600 transition-all duration-300"
-                              style={{ width: `${Math.min(progress, 100)}%` }}
-                            />
-                          </div>
-                          <div className="flex justify-between text-sm">
-                            <span>Payé: {formatCurrency(totalPaid, grant.currency)}</span>
-                            <span className="text-orange-600">Reste: {formatCurrency(remaining, grant.currency)}</span>
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {payment.partialPayments?.length || 0} versement(s) effectué(s)
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
             {/* Compte bancaire */}
             {grant.bankAccount && (
@@ -782,15 +1056,31 @@ const GrantManager: React.FC<GrantManagerProps> = ({
           <h2 className="text-2xl font-bold text-gray-900">Gestion des Subventions</h2>
           <p className="text-gray-600 mt-1">Gérez vos subventions et financements</p>
         </div>
-        {canCreate && (
-          <button
-            onClick={() => setShowForm(true)}
-            className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2 w-full sm:w-auto justify-center"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Nouvelle Subvention</span>
-          </button>
-        )}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          {canExport && (
+            <button
+              onClick={() => exportGrantsPDF(
+                filteredGrants.filter(g => selectedForExport.has(g.id)),
+                `Subventions_selection_${new Date().toISOString().slice(0, 10)}.pdf`
+              )}
+              disabled={selectedForExport.size === 0 || isExporting}
+              className="bg-white border border-blue-600 text-blue-700 px-4 py-2 rounded-xl font-medium hover:bg-blue-50 transition-all duration-200 flex items-center space-x-2 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Cochez des subventions puis exportez-les en PDF avec leurs détails"
+            >
+              <Download className="w-4 h-4" />
+              <span>{isExporting ? 'Génération...' : `Exporter la sélection (${selectedForExport.size})`}</span>
+            </button>
+          )}
+          {canCreate && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2 justify-center"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Nouvelle Subvention</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Section Recherche et Filtres */}
@@ -1008,73 +1298,89 @@ const GrantManager: React.FC<GrantManagerProps> = ({
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Montant total notifié *
+                <label className="block text-sm font-medium text-gray-500 mb-2">
+                  Montant total notifié
+                  <span className="ml-2 text-xs font-normal text-gray-400">(non modifiable)</span>
                 </label>
                 <div className="relative">
                   <input
-                    type="number" 
-                    step="0.01"
-                    min="0"
-                    value={formData.totalAmount}
-                    onChange={(e) => setFormData(prev => ({ ...prev, totalAmount: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-12"
-                    placeholder="0.00"
-                    required
+                    type="text"
+                    value={(editingGrant ? editingGrant.totalAmount : 0).toLocaleString('fr-FR')}
+                    readOnly
+                    disabled
+                    className="w-full px-3 py-2 border border-gray-200 bg-gray-100 text-gray-500 rounded-lg cursor-not-allowed pl-12"
                   />
-                  <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 text-sm">
+                  <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 text-sm">
                     {getCurrencySymbol(formData.currency)}
                   </div>
                 </div>
-                {editingGrant && budgetLines.filter(line => line.grantId === editingGrant.id).length > 0 && (
-                  <p className="text-xs text-blue-600 mt-1">
-                    ⚡ La modification sera répartie proportionnellement aux lignes budgétaires
-                  </p>
-                )}
+                <p className="text-xs text-gray-500 mt-1">
+                  Le budget notifié est alimenté uniquement par les notifications :
+                  utilisez le bouton <strong>« Notifier un montant »</strong> sur la carte de la subvention.
+                  {!editingGrant && ' Une nouvelle subvention démarre à 0.'}
+                </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Date de début *
+                    Date de début {!editingGrant && '*'}
                   </label>
                   <input
                     type="date"
                     value={formData.startDate}
                     onChange={(e) => setFormData(prev => ({ ...prev, startDate: e.target.value }))}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
+                    required={!editingGrant}
                   />
+                  {editingGrant && <p className="text-xs text-gray-400 mt-1">Laissez vide pour conserver la date actuelle.</p>}
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Date de fin *
+                    Date de fin {!editingGrant && '*'}
                   </label>
                   <input
                     type="date"
                     value={formData.endDate}
                     onChange={(e) => setFormData(prev => ({ ...prev, endDate: e.target.value }))}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
+                    required={!editingGrant}
                   />
+                  {editingGrant && <p className="text-xs text-gray-400 mt-1">Laissez vide pour conserver la date actuelle.</p>}
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className={`block text-sm font-medium mb-2 ${editingGrant ? 'text-gray-700' : 'text-gray-500'}`}>
                   Statut
+                  {!editingGrant && <span className="ml-2 text-xs font-normal text-gray-400">(défini automatiquement)</span>}
                 </label>
-                <select
-                  value={formData.status}
-                  onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Grant['status'] }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value="pending">En attente</option>
-                  <option value="active">Active</option>
-                  <option value="completed">Terminée</option>
-                  <option value="suspended">Suspendue</option>
-                </select>
+                {editingGrant ? (
+                  <select
+                    value={formData.status}
+                    onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Grant['status'] }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="pending">En attente</option>
+                    <option value="active">Active</option>
+                    <option value="completed">Terminée</option>
+                    <option value="suspended">Suspendue</option>
+                  </select>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      value="En attente"
+                      readOnly
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-200 bg-gray-100 text-gray-500 rounded-lg cursor-not-allowed"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Une nouvelle subvention est créée « en attente ». Elle passe automatiquement à « Active » dès le premier montant notifié.
+                    </p>
+                  </>
+                )}
               </div>
 
               <div>
@@ -1221,9 +1527,8 @@ const GrantManager: React.FC<GrantManagerProps> = ({
           ) : (
             <div className="space-y-4">
               {currentSortedGrants.map((grant) => {
-                const grantBudgetLines = budgetLines.filter(line => line.grantId === grant.id);
-                const totalEngaged = grantBudgetLines.reduce((sum, line) => sum + line.engagedAmount, 0);
-                
+                const totalEngaged = getEngagedForGrant(grant.id);
+
                 const totalDisbursed = getTotalDisbursed(grant.id);
                 const totalEngagedNotDisbursed = getTotalEngagedNotDisbursed(grant.id);
                 const paymentStats = getPaymentStatsForGrant(grant.id);
@@ -1236,10 +1541,22 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                 const daysRemaining = grant.endDate ? getDaysRemaining(grant.endDate) : null;
 
                 return (
-                  <div key={grant.id} className="border border-gray-200 rounded-xl p-4 md:p-6 hover:shadow-md transition-shadow">
+                  <div key={grant.id} className={`bg-white border border-gray-200 border-l-4 ${getStatusAccent(grant.status)} rounded-xl p-4 md:p-6 hover:shadow-md transition-shadow`}>
                     <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between mb-4 gap-4">
                       <div className="flex-1">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-3 mb-2 gap-2">
+                          {canExport && (
+                            <button
+                              type="button"
+                              onClick={() => toggleExportSelection(grant.id)}
+                              className="flex items-center text-gray-400 hover:text-blue-600 transition-colors w-fit"
+                              title={selectedForExport.has(grant.id) ? 'Retirer de la sélection à exporter' : 'Sélectionner pour l\'export'}
+                            >
+                              {selectedForExport.has(grant.id)
+                                ? <CheckSquare className="w-5 h-5 text-blue-600" />
+                                : <Square className="w-5 h-5" />}
+                            </button>
+                          )}
                           <h4 className="text-lg font-semibold text-gray-900">{grant.name}</h4>
                           <span className={`px-2 py-1 text-xs font-medium rounded-full w-fit ${getStatusColor(grant.status)}`}>
                             {getStatusLabel(grant.status)}
@@ -1251,7 +1568,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                             </span>
                           )}
                         </div>
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 text-sm text-gray-600 mb-3 gap-1">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 text-sm text-gray-600 mb-2 gap-1">
                           <span className="flex items-center space-x-1">
                             <Building className="w-4 h-4" />
                             <span>{grant.grantingOrganization}</span>
@@ -1260,19 +1577,26 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                           <span>Réf: {grant.reference}</span>
                           <span className="hidden sm:block">•</span>
                           <span>{grant.year}</span>
+                        </div>
+                        {/* Période d'exécution : début → fin, bien visible */}
+                        <div className="flex flex-wrap items-center gap-2 mb-3">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-700">
+                            <Calendar className="w-4 h-4 text-gray-500" />
+                            <span className="text-gray-500">Du</span>
+                            <span className="font-medium text-gray-900">{grant.startDate ? new Date(grant.startDate).toLocaleDateString('fr-FR') : '—'}</span>
+                            <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
+                            <span className="text-gray-500">au</span>
+                            <span className="font-medium text-gray-900">{grant.endDate ? new Date(grant.endDate).toLocaleDateString('fr-FR') : '—'}</span>
+                          </span>
                           {grant.endDate && daysRemaining !== null && (
-                            <>
-                              <span className="hidden sm:block">•</span>
-                              <span className={`flex items-center space-x-1 ${
-                                daysRemaining < 30 ? 'text-red-600' : daysRemaining < 90 ? 'text-yellow-600' : 'text-green-600'
-                              }`}>
-                                <Calendar className="w-4 h-4" />
-                                <span>
-                                  {daysRemaining > 0 ? `${daysRemaining} jours restants` : 
-                                   daysRemaining === 0 ? 'Expire aujourd\'hui' : 'Expiré'}
-                                </span>
-                              </span>
-                            </>
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-sm font-medium ${
+                              daysRemaining < 30 ? 'bg-red-50 text-red-700 border border-red-200'
+                                : daysRemaining < 90 ? 'bg-yellow-50 text-yellow-700 border border-yellow-200'
+                                : 'bg-green-50 text-green-700 border border-green-200'
+                            }`}>
+                              {daysRemaining > 0 ? `${daysRemaining} jours restants` :
+                               daysRemaining === 0 ? 'Expire aujourd\'hui' : 'Expiré'}
+                            </span>
                           )}
                         </div>
                         {grant.description && (
@@ -1280,6 +1604,26 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                         )}
                       </div>
                       <div className="flex items-center space-x-2 self-end lg:self-auto">
+                        {canEdit && onAddNotificationTranche && (() => {
+                          const hasStructure = getSubLinesForGrant(grant.id).length > 0;
+                          return (
+                            <button
+                              onClick={() => hasStructure && setTrancheGrant(grant)}
+                              disabled={!hasStructure}
+                              className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                                hasStructure
+                                  ? 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100'
+                                  : 'text-gray-400 bg-gray-100 cursor-not-allowed'
+                              }`}
+                              title={hasStructure
+                                ? 'Notifier un montant (ajouter une tranche au budget notifié)'
+                                : 'Ajoutez d\'abord des lignes et sous-lignes budgétaires (Planification) pour pouvoir notifier un montant'}
+                            >
+                              <Plus className="w-4 h-4" />
+                              <span className="hidden sm:inline">Notifier un montant</span>
+                            </button>
+                          );
+                        })()}
                         <button
                           onClick={() => {
                             setSelectedGrantId(grant.id);
@@ -1311,66 +1655,73 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                       </div>
                     </div>
 
-                    {/* Résumé financier */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 md:gap-3 mb-4">
-                      <div className="bg-blue-50 rounded-lg p-2 md:p-3">
+                    {/* Résumé financier — 3 cartes par ligne, 2 lignes */}
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 mb-4">
+                      <div
+                        onClick={() => onNavigate && onNavigate('budget_planning')}
+                        title="Montant planifié (somme des budgets planifiés des lignes) — cliquez pour la planification"
+                        className={`bg-indigo-50 rounded-lg p-2 md:p-3 ${onNavigate ? 'cursor-pointer hover:ring-2 hover:ring-indigo-200 transition' : ''}`}
+                      >
+                        <p className="text-xs text-indigo-600 font-medium mb-1">Montant planifié</p>
+                        <p className="text-sm md:text-base font-semibold text-indigo-900">
+                          {formatCurrency(getPlannedForGrant(grant.id), grant.currency)}
+                        </p>
+                        <p className="text-[10px] text-indigo-500 mt-1">Budget planifié total</p>
+                      </div>
+                      <div
+                        onClick={() => onNavigate && onNavigate('budget_planning')}
+                        title="Budget total notifié pour la subvention — cliquez pour la planification"
+                        className={`bg-blue-50 rounded-lg p-2 md:p-3 ${onNavigate ? 'cursor-pointer hover:ring-2 hover:ring-blue-200 transition' : ''}`}
+                      >
                         <p className="text-xs text-blue-600 font-medium mb-1">Notifié</p>
                         <p className="text-sm md:text-base font-semibold text-blue-900">
                           {formatCurrency(grant.totalAmount, grant.currency)}
                         </p>
+                        <p className="text-[10px] text-blue-500 mt-1">Budget alloué total</p>
                       </div>
-                      <div className="bg-orange-50 rounded-lg p-2 md:p-3">
+                      <div
+                        onClick={() => onNavigate && onNavigate('engagements')}
+                        title="Montant des engagements approuvés — cliquez pour la page Engagements"
+                        className={`bg-orange-50 rounded-lg p-2 md:p-3 ${onNavigate ? 'cursor-pointer hover:ring-2 hover:ring-orange-200 transition' : ''}`}
+                      >
                         <p className="text-xs text-orange-600 font-medium mb-1">Engagé</p>
                         <p className="text-sm md:text-base font-semibold text-orange-900">
                           {formatCurrency(totalEngaged, grant.currency)}
                         </p>
-                        <p className="text-xs text-orange-500">
-                          {utilizationRate.toFixed(2)}%
-                        </p>
+                        <p className="text-[10px] text-orange-500 mt-1">{utilizationRate.toFixed(2)}% du notifié</p>
                       </div>
-                      <div className="bg-green-50 rounded-lg p-2 md:p-3">
+                      <div
+                        onClick={() => onNavigate && onNavigate('treasury')}
+                        title="Argent réellement décaissé (direct + échelonné) — cliquez pour la Trésorerie"
+                        className={`bg-green-50 rounded-lg p-2 md:p-3 ${onNavigate ? 'cursor-pointer hover:ring-2 hover:ring-green-200 transition' : ''}`}
+                      >
                         <p className="text-xs text-green-600 font-medium mb-1">Décaissé</p>
                         <p className="text-sm md:text-base font-semibold text-green-900">
                           {formatCurrency(totalDisbursed, grant.currency)}
                         </p>
-                        <p className="text-xs text-green-500">
-                          {disbursementRate.toFixed(2)}%
-                        </p>
+                        <p className="text-[10px] text-green-500 mt-1">{disbursementRate.toFixed(2)}% du notifié</p>
                       </div>
-                      <div className="bg-purple-50 rounded-lg p-2 md:p-3">
-                        <p className="text-xs text-purple-600 font-medium mb-1">En cours</p>
-                        <p className="text-sm md:text-base font-semibold text-purple-900">
-                          {formatCurrency(paymentStats.inProgress, grant.currency)}
-                        </p>
-                        {activePartialPayments > 0 && (
-                          <p className="text-xs text-purple-500">
-                            {activePartialPayments} paiement(s)
-                          </p>
-                        )}
-                      </div>
-                      <div className="bg-red-50 rounded-lg p-2 md:p-3">
-                        <p className="text-xs text-red-600 font-medium mb-1">Reste</p>
-                        <p className="text-sm md:text-base font-semibold text-red-900">
-                          {formatCurrency(paymentStats.remainingToPay, grant.currency)}
-                        </p>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-2 md:p-3">
+                      <div
+                        onClick={() => onNavigate && onNavigate('engagements')}
+                        title="Budget encore disponible à engager (Notifié − Engagé) — cliquez pour les Engagements"
+                        className={`bg-gray-50 rounded-lg p-2 md:p-3 ${onNavigate ? 'cursor-pointer hover:ring-2 hover:ring-gray-200 transition' : ''}`}
+                      >
                         <p className="text-xs text-gray-600 font-medium mb-1">Non engagé</p>
                         <p className="text-sm md:text-base font-semibold text-gray-900">
                           {formatCurrency(Math.max(0, grant.totalAmount - totalEngaged), grant.currency)}
                         </p>
+                        <p className="text-[10px] text-gray-500 mt-1">Reste à engager</p>
                       </div>
-                      <div className="bg-indigo-50 rounded-lg p-2 md:p-3">
-                        <p className="text-xs text-indigo-600 font-medium mb-1">Progression</p>
-                        <p className="text-sm md:text-base font-semibold text-indigo-900">
-                          {progressRate.toFixed(2)}%
+                      <div
+                        onClick={() => onNavigate && onNavigate('payments')}
+                        title="Montant des paiements refusés — cliquez pour la page Paiements"
+                        className={`bg-red-50 rounded-lg p-2 md:p-3 ${onNavigate ? 'cursor-pointer hover:ring-2 hover:ring-red-200 transition' : ''}`}
+                      >
+                        <p className="text-xs text-red-600 font-medium mb-1">Paiements rejetés</p>
+                        <p className="text-sm md:text-base font-semibold text-red-900">
+                          {formatCurrency(getRejectedPaymentsForGrant(grant.id), grant.currency)}
                         </p>
-                        <div className="w-full bg-gray-200 rounded-full h-1 mt-1">
-                          <div 
-                            className="h-1 rounded-full bg-indigo-600 transition-all duration-300"
-                            style={{ width: `${Math.min(progressRate, 100)}%` }}
-                          />
-                        </div>
+                        <p className="text-[10px] text-red-500 mt-1">Paiements refusés</p>
                       </div>
                     </div>
 
@@ -1408,20 +1759,6 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                         </div>
                       </div>
 
-                      {activePartialPayments > 0 && (
-                        <div>
-                          <div className="flex justify-between items-center mb-1">
-                            <span className="text-sm font-medium text-purple-700">Progression des paiements échelonnés</span>
-                            <span className="text-sm text-purple-600">{progressRate.toFixed(2)}%</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2">
-                            <div 
-                              className="h-2 rounded-full bg-purple-600 transition-all duration-300"
-                              style={{ width: `${Math.min(progressRate, 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
                     </div>
 
                     {/* Compte bancaire */}
@@ -1507,6 +1844,16 @@ const GrantManager: React.FC<GrantManagerProps> = ({
           </div>
         )}
       </div>
+
+      {/* Modal Nouvelle notification (tranche) — composant partagé avec la Planification */}
+      {trancheGrant && onAddNotificationTranche && (
+        <NotificationTrancheModal
+          grant={trancheGrant}
+          subBudgetLines={getSubLinesForGrant(trancheGrant.id)}
+          onSubmit={(t) => onAddNotificationTranche(t)}
+          onClose={() => setTrancheGrant(null)}
+        />
+      )}
 
       {/* Modal Détails Subvention */}
       {showGrantDetails && selectedGrantId && (
